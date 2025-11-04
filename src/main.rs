@@ -11,13 +11,15 @@ use anyhow::Context;
 
 use crate::config::{ServiceConfig, load_public_params};
 use crate::exact::X402ExactService;
-use crate::issuer::LiveGuaranteeIssuer;
+use crate::issuer::{GuaranteeIssuer, LiveGuaranteeIssuer};
 use crate::server::state::{AppState, ExactService, FourMicaHandler};
-use crate::verifier::CertificateVerifier;
+use crate::verifier::{CertificateValidator, CertificateVerifier};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    dotenvy::dotenv().ok();
+    if dotenvy::from_filename(".env").is_err() {
+        dotenvy::dotenv().ok();
+    }
     telemetry::init();
 
     let service_cfg =
@@ -38,13 +40,13 @@ async fn main() -> anyhow::Result<()> {
     let four_mica_handler = FourMicaHandler::new(
         service_cfg.scheme.clone(),
         service_cfg.network.clone(),
-        verifier,
-        issuer,
+        verifier.clone() as Arc<dyn CertificateValidator>,
+        issuer.clone() as Arc<dyn GuaranteeIssuer>,
     );
 
     let exact_service: Option<Arc<dyn ExactService>> = match X402ExactService::try_from_env().await
     {
-        Ok(Some(service)) => Some(Arc::new(service)),
+        Ok(Some(service)) => Some(Arc::new(service) as Arc<dyn ExactService>),
         Ok(None) => None,
         Err(err) => {
             tracing::warn!(reason = %err, "exact scheme facilitator disabled");

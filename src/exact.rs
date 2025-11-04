@@ -1,14 +1,15 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use tracing::warn;
 use x402_rs::facilitator::Facilitator;
 use x402_rs::facilitator_local::FacilitatorLocal;
 use x402_rs::provider_cache::{ProviderCache, ProviderMap};
 use x402_rs::types::{
-    Base64Bytes, FacilitatorErrorReason, Network, PaymentPayload,
-    PaymentRequirements as XPaymentRequirements, Scheme, SettleRequest as XSettleRequest,
-    SettleResponse as XSettleResponse, SupportedPaymentKindsResponse,
-    VerifyRequest as XVerifyRequest, VerifyResponse as XVerifyResponse, X402Version,
+    Base64Bytes, PaymentPayload, PaymentRequirements as XPaymentRequirements,
+    SettleRequest as XSettleRequest, SettleResponse as XSettleResponse,
+    SupportedPaymentKindsResponse, VerifyRequest as XVerifyRequest,
+    VerifyResponse as XVerifyResponse, X402Version,
 };
 
 use crate::server::state::{
@@ -24,7 +25,10 @@ impl X402ExactService {
     pub async fn try_from_env() -> anyhow::Result<Option<Self>> {
         let cache = match ProviderCache::from_env().await {
             Ok(cache) => cache,
-            Err(err) => return Err(anyhow::Error::from(err)),
+            Err(err) => {
+                warn!(reason = %err, "failed to initialize exact facilitator from environment");
+                return Ok(None);
+            }
         };
 
         if cache.values().next().is_none() {

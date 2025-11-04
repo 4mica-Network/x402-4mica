@@ -16,7 +16,7 @@ const SUPPORTED_VERSION: u8 = 1;
 
 pub(super) type SharedState = Arc<AppState>;
 
-pub(super) struct AppState {
+pub(crate) struct AppState {
     four_mica: Option<FourMicaHandler>,
     exact: Option<Arc<dyn ExactService>>,
 }

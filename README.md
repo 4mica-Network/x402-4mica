@@ -24,10 +24,18 @@ export FOUR_MICA_RPC_URL=https://api.4mica.xyz/
 
 # Optional: pin the expected domain separator (32-byte hex, 0x-prefixed)
 export FOUR_MICA_GUARANTEE_DOMAIN=0x...
+
+# Optional: enable standard x402 settlement for EVM networks
+export SIGNER_TYPE=private-key
+export EVM_PRIVATE_KEY=0x...
+export RPC_URL_BASE=https://mainnet.base.org
+export RPC_URL_BASE_SEPOLIA=https://sepolia.base.org
 ```
 
 On startup the facilitator calls `FOUR_MICA_RPC_URL/core/public-params` to obtain the operator’s BLS
-public key, EIP‑712 metadata, and contract address. No private keys are required.
+public key, EIP‑712 metadata, and contract address. If the optional x402 environment variables are set,
+the service also initialises the default `exact` ERC-3009 facilitator from `x402-rs`; otherwise those
+networks are simply omitted from `/supported`.
 
 ## Running
 
@@ -61,12 +69,15 @@ endpoints without contacting 4Mica.
    - `userAddress`: checksum user address that must sign the claim.
 4. **User** signs an EIP‑712 guarantee claim using the tab details and retries the HTTP call with
    `X-PAYMENT`, a base64 JSON envelope containing the claim and signature.
-5. **Recipient** posts the header and requirements to the facilitator’s `/verify`. The facilitator
-   validates the payload, requests a BLS guarantee from 4Mica core, and verifies the returned
-   certificate against operator parameters and the original claim.
-6. **Facilitator** returns `certificate` in the `/verify` response. The resource server proceeds with
-   the request using that guarantee. `/settle` remains a no-op acknowledgement; actual remuneration
-   still happens later via the recipient’s own 4Mica integration.
+5. **Recipient** posts the header and requirements to the facilitator’s `/verify`. When the scheme is
+   `4mica-guarantee`, the facilitator validates the payload, requests a BLS guarantee from 4Mica core,
+   and verifies the returned certificate against operator parameters and the original claim. For other
+   schemes (e.g. `exact`), the facilitator forwards the request to the upstream `x402-rs`
+   implementation and follows the standard ERC-3009 verification flow.
+6. **Facilitator** returns `certificate` in the `/verify` response for 4Mica requests, or a standard
+   x402 verification response for other schemes. `/settle` remains a no-op acknowledgement in the
+   4Mica case; when the scheme is handled by x402, `/settle` executes the on-chain transfer through the
+   upstream facilitator.
 
 ## X-PAYMENT Header Schema
 
@@ -102,10 +113,13 @@ On decode the facilitator issues and verifies a certificate, enforcing that:
 
 ## HTTP Surface
 
-- `GET /supported` – supported `(scheme, network)` tuple.
+- `GET /supported` – supported `(scheme, network)` tuples for both the 4Mica credit flow and any
+  x402 `exact` flows initialised from environment configuration.
 - `POST /verify` – `{ "x402Version", "paymentHeader", "paymentRequirements" }` → `{ "isValid", "invalidReason", "certificate" }`
-  where `certificate` contains the hex-encoded `claims`/`signature` returned by 4Mica when the
-  guarantee is accepted.
+  where `certificate` is present only for `scheme: "4mica-guarantee"` and contains the
+  hex-encoded `claims`/`signature` returned by 4Mica after the facilitator has submitted the
+  user-signed claim. For other schemes (for example `exact`) the field is omitted and the response
+  mirrors the upstream x402 facilitator’s result.
 - `POST /settle` – same payload; re-runs verification and returns `{ "success", "networkId", "error" }`
   with `success: true` indicating the payment was acknowledged (no on-chain action is taken).
 - `GET /health` – `{ "status": "ok" }`.
