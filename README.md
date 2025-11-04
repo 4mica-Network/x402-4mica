@@ -46,6 +46,13 @@ cargo run
 The bound address is logged on start-up. Use `GET /supported` to read the advertised
 `(scheme, network)` pair that resource servers should use in their `402 Payment Required` responses.
 
+## Python Client Example
+
+An HTTP client script is available under `examples/x402_facilitator_client.py`. It can fetch
+supported schemes, run health checks, and submit `/verify` or `/settle` requests once you provide
+the `paymentRequirements` JSON alongside either a pre-encoded payment header or the raw guarantee
+claims plus signature. Run `python examples/x402_facilitator_client.py --help` for usage details.
+
 ## Testing
 
 ```bash

@@ -62,6 +62,7 @@ pub async fn load_public_params() -> Result<PublicParameters> {
 
     let guarantee_domain = std::env::var(ENV_GUARANTEE_DOMAIN)
         .ok()
+        .filter(|value| !value.trim().is_empty())
         .map(|value| parse_hex_array::<32>(&value))
         .transpose()?;
 
