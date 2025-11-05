@@ -78,10 +78,37 @@ impl GuaranteeIssuer for LiveGuaranteeIssuer {
             .await
             .map_err(|err| err.to_string())?;
 
-        let response = response.error_for_status().map_err(|err| err.to_string())?;
-        response
-            .json::<BLSCert>()
-            .await
-            .map_err(|err| err.to_string())
+        let status = response.status();
+        let bytes = response.bytes().await.map_err(|err| err.to_string())?;
+
+        if !status.is_success() {
+            let message = parse_error_message(&bytes);
+            return Err(format!(
+                "core guarantee request failed ({status}): {message}"
+            ));
+        }
+
+        serde_json::from_slice::<BLSCert>(&bytes)
+            .map_err(|err| format!("failed to decode guarantee response: {err}"))
+    }
+}
+
+fn parse_error_message(bytes: &[u8]) -> String {
+    if bytes.is_empty() {
+        return "unknown error".to_string();
+    }
+
+    if let Ok(value) = serde_json::from_slice::<serde_json::Value>(bytes) {
+        if let Some(msg) = value.get("error").and_then(|v| v.as_str()) {
+            return msg.to_string();
+        }
+        if let Some(msg) = value.get("message").and_then(|v| v.as_str()) {
+            return msg.to_string();
+        }
+    }
+
+    match std::str::from_utf8(bytes) {
+        Ok(text) if !text.trim().is_empty() => text.trim().to_string(),
+        _ => "unknown error".to_string(),
     }
 }

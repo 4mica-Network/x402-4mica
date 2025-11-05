@@ -5,12 +5,13 @@ use reqwest::Url;
 use serde::Deserialize;
 
 const DEFAULT_API_URL: &str = "https://api.4mica.xyz/";
-const ENV_API_URL: &str = "FOUR_MICA_RPC_URL";
+const ENV_API_URLS: [&str; 2] = ["FOUR_MICA_RPC_URL", "4MICA_RPC_URL"];
 const ENV_SCHEME: &str = "X402_SCHEME";
 const ENV_NETWORK: &str = "X402_NETWORK";
 const ENV_HOST: &str = "HOST";
 const ENV_PORT: &str = "PORT";
-const ENV_GUARANTEE_DOMAIN: &str = "FOUR_MICA_GUARANTEE_DOMAIN";
+const ENV_GUARANTEE_DOMAIN_VARIANTS: [&str; 2] =
+    ["FOUR_MICA_GUARANTEE_DOMAIN", "4MICA_GUARANTEE_DOMAIN"];
 
 #[derive(Clone)]
 pub struct ServiceConfig {
@@ -53,16 +54,14 @@ struct CorePublicParameters {
 }
 
 pub async fn load_public_params() -> Result<PublicParameters> {
-    let api_url = std::env::var(ENV_API_URL).unwrap_or_else(|_| DEFAULT_API_URL.into());
+    let api_url = first_env_value(&ENV_API_URLS).unwrap_or_else(|| DEFAULT_API_URL.into());
     let api_base = normalize_url(&api_url)?;
     let params = fetch_public_params(&api_base).await?;
     let operator_public_key = params.public_key.try_into().map_err(|bytes: Vec<u8>| {
         anyhow::anyhow!("operator public key must be 48 bytes, got {}", bytes.len())
     })?;
 
-    let guarantee_domain = std::env::var(ENV_GUARANTEE_DOMAIN)
-        .ok()
-        .filter(|value| !value.trim().is_empty())
+    let guarantee_domain = first_env_value(&ENV_GUARANTEE_DOMAIN_VARIANTS)
         .map(|value| parse_hex_array::<32>(&value))
         .transpose()?;
 
@@ -70,6 +69,15 @@ pub async fn load_public_params() -> Result<PublicParameters> {
         api_base_url: api_base,
         operator_public_key,
         guarantee_domain,
+    })
+}
+
+fn first_env_value(names: &[&str]) -> Option<String> {
+    names.iter().find_map(|name| {
+        std::env::var(name)
+            .ok()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
     })
 }
 

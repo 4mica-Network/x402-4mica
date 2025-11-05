@@ -21,9 +21,11 @@ export X402_NETWORK=4mica-mainnet
 
 # 4Mica public API – used to fetch operator parameters
 export FOUR_MICA_RPC_URL=https://api.4mica.xyz/
+# (alias supported for consistency with rust-sdk-4mica: 4MICA_RPC_URL)
 
 # Optional: pin the expected domain separator (32-byte hex, 0x-prefixed)
 export FOUR_MICA_GUARANTEE_DOMAIN=0x...
+# (alias supported: 4MICA_GUARANTEE_DOMAIN)
 
 # Optional: enable standard x402 settlement for EVM networks
 export SIGNER_TYPE=private-key
@@ -32,7 +34,8 @@ export RPC_URL_BASE=https://mainnet.base.org
 export RPC_URL_BASE_SEPOLIA=https://sepolia.base.org
 ```
 
-On startup the facilitator calls `FOUR_MICA_RPC_URL/core/public-params` to obtain the operator’s BLS
+On startup the facilitator calls `FOUR_MICA_RPC_URL/core/public-params`
+(or `4MICA_RPC_URL/core/public-params`) to obtain the operator’s BLS
 public key, EIP‑712 metadata, and contract address. If the optional x402 environment variables are set,
 the service also initialises the default `exact` ERC-3009 facilitator from `x402-rs`; otherwise those
 networks are simply omitted from `/supported`.
@@ -48,10 +51,26 @@ The bound address is logged on start-up. Use `GET /supported` to read the advert
 
 ## Python Client Example
 
-An HTTP client script is available under `examples/x402_facilitator_client.py`. It can fetch
-supported schemes, run health checks, and submit `/verify` or `/settle` requests once you provide
-the `paymentRequirements` JSON alongside either a pre-encoded payment header or the raw guarantee
-claims plus signature. Run `python examples/x402_facilitator_client.py --help` for usage details.
+`examples/x402_facilitator_client.py` walks through the client responsibilities:
+
+- `discover` — call a paywalled resource, capture the `paymentRequirements`, and show what needs to
+  be signed.
+- `verify` / `settle` — send the base64 `paymentHeader` and requirements to the facilitator once the
+  client has signed the claims with their private key.
+- `auto` — end-to-end helper that signs the guarantee locally, replays the resource request with the
+  generated `X-PAYMENT` header, and optionally submits `/verify`/`/settle` for diagnostics.
+- `supported`, `health` — quick facilitator diagnostics.
+
+You can pair the client with `examples/mock_paid_api.py`, a FastAPI server that simulates a
+paywalled endpoint. Start it with `python examples/mock_paid_api.py` (set `PORT` to override the
+default `9000`). The mock resource will call the facilitator’s `/verify` endpoint (defaulting to
+`http://localhost:8080`; override with `FACILITATOR_URL`) whenever it receives an `X-PAYMENT`
+header. With both services running you can execute
+`python examples/x402_facilitator_client.py discover --resource-url http://localhost:9000/protected`
+to see the mock `paymentRequirements` payload.
+
+Run `python examples/x402_facilitator_client.py --help` inside a virtualenv with
+`pip install -r examples/requirements.txt` for full usage details.
 
 ## Testing
 
