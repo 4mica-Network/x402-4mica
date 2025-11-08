@@ -617,6 +617,7 @@ def run_auto(api: FacilitatorApi, args: argparse.Namespace) -> None:
         tab_id_raw = _first_present(extra, "tabId", "tab_id")
         req_id_raw = _first_present(extra, "reqId", "req_id")
         user_from_requirements = _first_present(extra, "userAddress", "user_address")
+        start_ts_raw = _first_present(extra, "startTimestamp", "start_timestamp")
 
         if tab_id_raw is None or req_id_raw is None or user_from_requirements is None:
             raise ValueError("paymentRequirements.extra must include tabId, reqId, userAddress")
@@ -632,6 +633,10 @@ def run_auto(api: FacilitatorApi, args: argparse.Namespace) -> None:
 
         tab_id_int = parse_u256(tab_id_raw, field="requirements.extra.tabId")
         req_id_int = parse_u256(req_id_raw, field="requirements.extra.reqId")
+        if start_ts_raw is None and req_id_int > 0:
+            raise ValueError(
+                "paymentRequirements.extra.startTimestamp is required once reqId exceeds 0"
+            )
 
         if args.amount:
             amount_source = args.amount
@@ -639,7 +644,14 @@ def run_auto(api: FacilitatorApi, args: argparse.Namespace) -> None:
             amount_source = requirements.max_amount_required
         amount_int = parse_u256(amount_source, field="amount")
 
-        timestamp = args.timestamp or int(time.time())
+        if start_ts_raw is not None:
+            timestamp = parse_u256(
+                start_ts_raw, field="requirements.extra.startTimestamp"
+            )
+        elif args.timestamp:
+            timestamp = args.timestamp
+        else:
+            timestamp = int(time.time())
         if timestamp <= 0:
             raise ValueError("timestamp must be a positive UNIX epoch value")
 

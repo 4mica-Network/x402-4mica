@@ -91,7 +91,8 @@ endpoints without contacting 4Mica.
    and guarantee parameters in the `paymentRequirements` body. The facilitator expects the
    `paymentRequirements.extra` object to include:
    - `tabId`: hex or decimal string identifying the open tab.
-   - `reqId`: per-request identifier unique within the tab.
+   - `reqId`: per-request identifier unique within the tab. The facilitator allocates this sequentially (starting at `0`) and resource servers may omit the field.
+   - `startTimestamp`: UNIX epoch (seconds) used when the tab was opened. **All** guarantees for a tab must reuse this value—4Mica rejects requests that change it.
    - `userAddress`: checksum user address that must sign the claim.
 4. **User** signs an EIP‑712 guarantee claim using the tab details and retries the HTTP call with
    `X-PAYMENT`, a base64 JSON envelope containing the claim and signature.

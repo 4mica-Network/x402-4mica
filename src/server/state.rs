@@ -10,6 +10,7 @@ use serde_json::Value;
 use thiserror::Error;
 
 use crate::issuer::GuaranteeIssuer;
+use crate::request_ids::{RequestIdError, RequestIdTracker};
 use crate::verifier::CertificateValidator;
 
 const SUPPORTED_VERSION: u8 = 1;
@@ -108,6 +109,7 @@ pub(crate) struct FourMicaHandler {
     network: String,
     verifier: Arc<dyn CertificateValidator>,
     issuer: Arc<dyn GuaranteeIssuer>,
+    request_ids: Arc<dyn RequestIdTracker>,
 }
 
 impl FourMicaHandler {
@@ -116,12 +118,14 @@ impl FourMicaHandler {
         network: String,
         verifier: Arc<dyn CertificateValidator>,
         issuer: Arc<dyn GuaranteeIssuer>,
+        request_ids: Arc<dyn RequestIdTracker>,
     ) -> Self {
         Self {
             scheme,
             network,
             verifier,
             issuer,
+            request_ids,
         }
     }
 
@@ -145,11 +149,36 @@ impl FourMicaHandler {
 
         self.ensure_claims_match_requirements(&prepared.claims, reqs)?;
 
-        let certificate = self
-            .issuer
-            .issue(&prepared.claims, &prepared.signature, prepared.scheme)
+        let reservation = self
+            .request_ids
+            .reserve(
+                prepared.claims.tab_id,
+                prepared.claims.req_id,
+                prepared.claims.timestamp,
+            )
             .await
-            .map_err(ValidationError::IssueGuarantee)?;
+            .map_err(ValidationError::from)?;
+
+        let certificate = if reservation.is_replay() {
+            self.request_ids
+                .fetch_certificate(prepared.claims.tab_id, prepared.claims.req_id)
+                .await
+                .map_err(ValidationError::from)?
+                .ok_or_else(|| {
+                    ValidationError::RequestState(format!(
+                        "guarantee for tab {:#x} req_id {:#x} not found",
+                        prepared.claims.tab_id, prepared.claims.req_id
+                    ))
+                })?
+        } else {
+            let cert = self
+                .issuer
+                .issue(&prepared.claims, &prepared.signature, prepared.scheme)
+                .await
+                .map_err(ValidationError::IssueGuarantee)?;
+            reservation.commit();
+            cert
+        };
 
         let claims = self
             .verifier
@@ -275,14 +304,16 @@ impl FourMicaHandler {
             )));
         }
 
-        let expected_req = parse_u256_str(&extra.req_id).map_err(|_| {
-            ValidationError::InvalidRequirements("invalid reqId in requirements.extra".into())
-        })?;
-        if claims.req_id != expected_req {
-            return Err(ValidationError::Mismatch(format!(
-                "claim req_id {} does not match expected req_id {}",
-                claims.req_id, expected_req
-            )));
+        if let Some(req_value) = extra.req_id.as_deref() {
+            let expected_req = parse_u256_str(req_value).map_err(|_| {
+                ValidationError::InvalidRequirements("invalid reqId in requirements.extra".into())
+            })?;
+            if claims.req_id != expected_req {
+                return Err(ValidationError::Mismatch(format!(
+                    "claim req_id {} does not match expected req_id {}",
+                    claims.req_id, expected_req
+                )));
+            }
         }
 
         let amount_required =
@@ -398,7 +429,7 @@ pub struct VerifyResponse {
     pub certificate: Option<CertificateResponse>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct CertificateResponse {
     pub claims: String,
@@ -527,7 +558,7 @@ struct RequirementsExtra {
     #[serde(rename = "userAddress")]
     user_address: String,
     #[serde(rename = "reqId")]
-    req_id: String,
+    req_id: Option<String>,
 }
 
 fn parse_extra(extra: &Option<Value>) -> Result<RequirementsExtra, ValidationError> {
@@ -536,7 +567,7 @@ fn parse_extra(extra: &Option<Value>) -> Result<RequirementsExtra, ValidationErr
             ValidationError::InvalidRequirements(format!("invalid requirements.extra: {err}"))
         }),
         None => Err(ValidationError::InvalidRequirements(
-            "paymentRequirements.extra must include tabId, userAddress, reqId".into(),
+            "paymentRequirements.extra must include tabId and userAddress".into(),
         )),
     }
 }
@@ -563,4 +594,47 @@ pub enum ValidationError {
     UnsupportedVersion(u8),
     #[error("exact flow error: {0}")]
     Exact(String),
+    #[error("{0}")]
+    RequestState(String),
+}
+
+impl From<RequestIdError> for ValidationError {
+    fn from(err: RequestIdError) -> Self {
+        match err {
+            RequestIdError::Fetch { details, .. } => ValidationError::RequestState(details),
+            RequestIdError::NotFound { tab_id, req_id } => ValidationError::RequestState(format!(
+                "guarantee for tab {tab_id:#x} req_id {req_id:#x} not found"
+            )),
+            RequestIdError::MissingCertificate { tab_id, req_id } => ValidationError::RequestState(
+                format!("guarantee for tab {tab_id:#x} req_id {req_id:#x} missing certificate"),
+            ),
+            RequestIdError::DecodeCertificate {
+                tab_id,
+                req_id,
+                details,
+            } => ValidationError::RequestState(format!(
+                "failed to decode certificate for tab {tab_id:#x} req_id {req_id:#x}: {details}"
+            )),
+            RequestIdError::ModifiedStartTimestamp {
+                tab_id,
+                expected,
+                actual,
+            } => ValidationError::RequestState(format!(
+                "tab {tab_id:#x} must reuse startTimestamp {expected}, got {actual}"
+            )),
+            RequestIdError::MissingStartTimestamp(tab_id) => ValidationError::RequestState(
+                format!("tab {tab_id:#x} is missing a recorded startTimestamp"),
+            ),
+            RequestIdError::InvalidStartTimestamp(tab_id, value) => ValidationError::RequestState(
+                format!("tab {tab_id:#x} reported invalid startTimestamp {value}"),
+            ),
+            RequestIdError::Mismatch {
+                tab_id,
+                expected,
+                actual,
+            } => ValidationError::Mismatch(format!(
+                "tab {tab_id:#x} expected req_id {expected:#x}, got {actual:#x}"
+            )),
+        }
+    }
 }

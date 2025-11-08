@@ -12,7 +12,7 @@ rust-sdk-4mica = { path = "../4mica-core/sdk" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "1.0"
-tokio = { version = "1.38", features = ["macros", "rt-multi-thread", "signal"] }
+tokio = { version = "1.38", features = ["macros", "rt-multi-thread", "signal", "sync"] }
 tower-http = { version = "0.5", features = ["trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

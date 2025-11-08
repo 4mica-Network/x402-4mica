@@ -93,7 +93,7 @@ impl GuaranteeIssuer for LiveGuaranteeIssuer {
     }
 }
 
-fn parse_error_message(bytes: &[u8]) -> String {
+pub(crate) fn parse_error_message(bytes: &[u8]) -> String {
     if bytes.is_empty() {
         return "unknown error".to_string();
     }

@@ -1,6 +1,7 @@
 mod config;
 mod exact;
 mod issuer;
+mod request_ids;
 mod server;
 mod telemetry;
 mod verifier;
@@ -12,6 +13,7 @@ use anyhow::Context;
 use crate::config::{ServiceConfig, load_public_params};
 use crate::exact::X402ExactService;
 use crate::issuer::{GuaranteeIssuer, LiveGuaranteeIssuer};
+use crate::request_ids::{LiveRequestIdTracker, RequestIdTracker};
 use crate::server::state::{AppState, ExactService, FourMicaHandler};
 use crate::verifier::{CertificateValidator, CertificateVerifier};
 
@@ -36,12 +38,16 @@ async fn main() -> anyhow::Result<()> {
         LiveGuaranteeIssuer::try_new(public_params.api_base_url.clone())
             .context("failed to initialize 4Mica guarantee issuer")?,
     );
+    let request_ids = Arc::new(LiveRequestIdTracker::new(
+        public_params.api_base_url.clone(),
+    ));
 
     let four_mica_handler = FourMicaHandler::new(
         service_cfg.scheme.clone(),
         service_cfg.network.clone(),
         verifier.clone() as Arc<dyn CertificateValidator>,
         issuer.clone() as Arc<dyn GuaranteeIssuer>,
+        request_ids.clone() as Arc<dyn RequestIdTracker>,
     );
 
     let exact_service: Option<Arc<dyn ExactService>> = match X402ExactService::try_from_env().await
