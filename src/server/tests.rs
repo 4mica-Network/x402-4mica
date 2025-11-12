@@ -1,6 +1,5 @@
-use std::collections::HashMap;
 use std::sync::{
-    Arc, Mutex,
+    Arc,
     atomic::{AtomicUsize, Ordering},
 };
 
@@ -17,14 +16,13 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 
 use crate::issuer::GuaranteeIssuer;
-use crate::request_ids::{RequestIdError, RequestIdReservation, RequestIdTracker};
 use crate::verifier::CertificateValidator;
 
 use super::{
     handlers::build_router,
     state::{
-        AppState, CertificateResponse, ExactService, FourMicaHandler, PaymentRequirements,
-        SettleRequest, SettleResponse, SharedState, ValidationError, VerifyRequest, VerifyResponse,
+        AppState, ExactService, FourMicaHandler, PaymentRequirements, SettleRequest,
+        SettleResponse, SharedState, ValidationError, VerifyRequest, VerifyResponse,
     },
 };
 
@@ -56,11 +54,10 @@ async fn verify_endpoint_accepts_valid_payload() {
 }
 
 #[tokio::test]
-async fn verify_accepts_replay_when_certificate_exists() {
+async fn verify_accepts_duplicate_payloads() {
     let verifier = Arc::new(MockVerifier::success());
     let issuer = Arc::new(MockIssuer::success());
-    let request_ids = Arc::new(MockRequestIds::new());
-    let state = test_state_with_tracker(verifier.clone(), issuer.clone(), request_ids.clone());
+    let state = test_state(verifier.clone(), issuer.clone());
     let router = build_router(state);
 
     let request_body = VerifyRequest {
@@ -79,10 +76,9 @@ async fn verify_accepts_replay_when_certificate_exists() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let payload: VerifyResponse = serde_json::from_slice(&body).unwrap();
     assert!(payload.is_valid);
-    let cert_resp = payload.certificate.clone().expect("certificate");
-    request_ids.store_certificate(U256::from(1), U256::ZERO, cert_from_response(&cert_resp));
+    assert!(payload.certificate.is_some());
 
-    // Second verification with the same req_id succeeds by replaying the stored certificate.
+    // Second verification with the same payload succeeds by issuing a fresh certificate.
     let response = router
         .oneshot(post_json("/verify", &request_body))
         .await
@@ -92,6 +88,7 @@ async fn verify_accepts_replay_when_certificate_exists() {
     let payload: VerifyResponse = serde_json::from_slice(&body).unwrap();
     assert!(payload.is_valid);
     assert!(payload.certificate.is_some());
+    assert_eq!(issuer.issue_calls(), 2);
 }
 
 #[tokio::test]
@@ -150,13 +147,11 @@ async fn supported_endpoint_returns_configured_kind() {
 async fn supported_includes_exact_when_available() {
     let verifier = Arc::new(MockVerifier::success());
     let issuer = Arc::new(MockIssuer::success());
-    let request_ids = Arc::new(MockRequestIds::new());
     let handler = FourMicaHandler::new(
         "4mica-guarantee".into(),
         "4mica-mainnet".into(),
         verifier as Arc<dyn CertificateValidator>,
         issuer as Arc<dyn GuaranteeIssuer>,
-        request_ids.clone() as Arc<dyn RequestIdTracker>,
     );
     let exact = Arc::new(MockExact::new());
     let state = AppState::new(Some(handler), Some(exact.clone() as Arc<dyn ExactService>));
@@ -328,21 +323,11 @@ async fn settle_rejects_invalid_version() {
 }
 
 fn test_state(verifier: Arc<MockVerifier>, issuer: Arc<MockIssuer>) -> SharedState {
-    let request_ids = Arc::new(MockRequestIds::new());
-    test_state_with_tracker(verifier, issuer, request_ids)
-}
-
-fn test_state_with_tracker(
-    verifier: Arc<MockVerifier>,
-    issuer: Arc<MockIssuer>,
-    request_ids: Arc<MockRequestIds>,
-) -> SharedState {
     let handler = FourMicaHandler::new(
         "4mica-guarantee".into(),
         "4mica-mainnet".into(),
         verifier.clone() as Arc<dyn CertificateValidator>,
         issuer.clone() as Arc<dyn GuaranteeIssuer>,
-        request_ids as Arc<dyn RequestIdTracker>,
     );
     Arc::new(AppState::new(Some(handler), None))
 }
@@ -383,7 +368,6 @@ fn encoded_header() -> String {
                         "user_address": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
                         "recipient_address": recipient,
                         "tab_id": "0x1",
-                        "req_id": "0x0",
                         "amount": "10",
                         "asset_address": asset,
                         "timestamp": 1
@@ -394,13 +378,6 @@ fn encoded_header() -> String {
         })
         .to_string(),
     )
-}
-
-fn cert_from_response(resp: &CertificateResponse) -> BLSCert {
-    BLSCert {
-        claims: resp.claims.clone(),
-        signature: resp.signature.clone(),
-    }
 }
 
 fn post_json<T: Serialize>(uri: &str, payload: &T) -> Request<Body> {
@@ -644,99 +621,5 @@ impl GuaranteeIssuer for MockIssuer {
         } else {
             Ok(self.certificate.clone())
         }
-    }
-}
-
-struct MockRequestIds {
-    next: Arc<Mutex<HashMap<U256, U256>>>,
-    start: Arc<Mutex<HashMap<U256, u64>>>,
-    certs: Arc<Mutex<HashMap<(U256, U256), BLSCert>>>,
-}
-
-impl MockRequestIds {
-    fn new() -> Self {
-        Self {
-            next: Arc::new(Mutex::new(HashMap::new())),
-            start: Arc::new(Mutex::new(HashMap::new())),
-            certs: Arc::new(Mutex::new(HashMap::new())),
-        }
-    }
-
-    fn store_certificate(&self, tab_id: U256, req_id: U256, cert: BLSCert) {
-        self.certs.lock().unwrap().insert((tab_id, req_id), cert);
-    }
-}
-
-#[async_trait]
-impl RequestIdTracker for MockRequestIds {
-    async fn reserve(
-        &self,
-        tab_id: U256,
-        claimed_req_id: U256,
-        claimed_timestamp: u64,
-    ) -> Result<RequestIdReservation, RequestIdError> {
-        let mut next_guard = self.next.lock().unwrap();
-        let entry = next_guard.entry(tab_id).or_insert(U256::ZERO);
-        let expected = *entry;
-        drop(next_guard);
-
-        if claimed_req_id == expected {
-            if expected > U256::ZERO {
-                let stored = self.start.lock().unwrap().get(&tab_id).copied();
-                match stored {
-                    Some(ts) if ts == claimed_timestamp => {}
-                    Some(ts) => {
-                        return Err(RequestIdError::ModifiedStartTimestamp {
-                            tab_id,
-                            expected: ts,
-                            actual: claimed_timestamp,
-                        });
-                    }
-                    None => return Err(RequestIdError::MissingStartTimestamp(tab_id)),
-                }
-            }
-
-            let next_map = self.next.clone();
-            let start_map = self.start.clone();
-            return Ok(RequestIdReservation::testing_fresh(
-                claimed_req_id,
-                claimed_timestamp,
-                move |issued, timestamp| {
-                    let mut map = next_map.lock().unwrap();
-                    map.insert(tab_id, issued.saturating_add(U256::from(1u64)));
-                    if issued.is_zero() {
-                        let mut starts = start_map.lock().unwrap();
-                        starts.insert(tab_id, timestamp);
-                    }
-                },
-            ));
-        }
-
-        if claimed_req_id < expected {
-            if let Some(ts) = self.start.lock().unwrap().get(&tab_id).copied() {
-                if ts != claimed_timestamp {
-                    return Err(RequestIdError::ModifiedStartTimestamp {
-                        tab_id,
-                        expected: ts,
-                        actual: claimed_timestamp,
-                    });
-                }
-            }
-            return Ok(RequestIdReservation::testing_replay(claimed_req_id));
-        }
-
-        Err(RequestIdError::Mismatch {
-            tab_id,
-            expected,
-            actual: claimed_req_id,
-        })
-    }
-
-    async fn fetch_certificate(
-        &self,
-        tab_id: U256,
-        req_id: U256,
-    ) -> Result<Option<BLSCert>, RequestIdError> {
-        Ok(self.certs.lock().unwrap().get(&(tab_id, req_id)).cloned())
     }
 }

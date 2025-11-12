@@ -45,7 +45,7 @@ DEFAULT_FACILITATOR_URL = "http://localhost:8080"
 
 _ENV_FILE_CACHE: Optional[Dict[str, str]] = None
 _REQUIREMENTS_CACHE: Optional[JsonDict] = None
-_TAB_STATE: Dict[str, Any] = {"tab_id": None, "next_req_id": 0, "start_timestamp": None}
+_TAB_STATE: Dict[str, Any] = {"tab_id": None, "start_timestamp": None}
 
 
 def _load_env_file() -> Dict[str, str]:
@@ -123,33 +123,6 @@ def _as_hex_u256(value: Any) -> str:
     raise RuntimeError(f"Unsupported U256 representation: {value!r}")
 
 
-def _parse_u256_int(value: Any) -> int:
-    if isinstance(value, int):
-        return value
-    if isinstance(value, str):
-        trimmed = value.strip()
-        if not trimmed:
-            raise RuntimeError("U256 value cannot be empty.")
-        base = 16 if trimmed.lower().startswith("0x") else 10
-        return int(trimmed, base)
-    raise RuntimeError(f"Unsupported U256 representation: {value!r}")
-
-
-def _next_req_id(tab_id: str) -> str:
-    current = _TAB_STATE["tab_id"]
-    if current != tab_id:
-        _TAB_STATE["tab_id"] = tab_id
-        _TAB_STATE["next_req_id"] = _TAB_STATE.get("next_req_id", 0)
-        _TAB_STATE["start_timestamp"] = None
-    req_index = int(_TAB_STATE.get("next_req_id", 0))
-    return _as_hex_u256(req_index)
-
-
-def _advance_req_id(tab_id: str) -> None:
-    if _TAB_STATE["tab_id"] == tab_id:
-        _TAB_STATE["next_req_id"] = int(_TAB_STATE.get("next_req_id", 0)) + 1
-
-
 def _parse_optional_int(name: str, value: Optional[str]) -> Optional[int]:
     if value is None:
         return None
@@ -157,28 +130,6 @@ def _parse_optional_int(name: str, value: Optional[str]) -> Optional[int]:
         return int(value, 10)
     except ValueError as err:
         raise RuntimeError(f"{name} must be an integer value.") from err
-
-
-def _fetch_latest_req_state(base_url: str, tab_id: str) -> Optional[Tuple[int, Optional[int]]]:
-    url = f"{base_url.rstrip('/')}/core/tabs/{tab_id}/guarantees/latest"
-    try:
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-    except requests.RequestException as err:
-        raise RuntimeError(f"Failed to fetch latest guarantee via {url}: {err}") from err
-
-    data = response.json()
-    if data is None:
-        return None
-
-    req_id = data.get("req_id")
-    if req_id is None:
-        return None
-
-    start_ts = data.get("start_timestamp")
-    parsed_req = _parse_u256_int(req_id)
-    parsed_start = int(start_ts) if start_ts is not None else None
-    return parsed_req, parsed_start
 
 
 def _ensure_payment_tab(
@@ -217,16 +168,8 @@ def _ensure_payment_tab(
     else:
         tab_id_hex = existing
 
-    latest_state = _fetch_latest_req_state(base_url, tab_id_hex)
-    if latest_state is None:
-        _TAB_STATE["next_req_id"] = 0
-        if _TAB_STATE.get("start_timestamp") is None:
-            _TAB_STATE["start_timestamp"] = None
-    else:
-        latest_req, start_ts = latest_state
-        _TAB_STATE["next_req_id"] = latest_req + 1
-        if start_ts is not None:
-            _TAB_STATE["start_timestamp"] = start_ts
+    if _TAB_STATE.get("start_timestamp") is None:
+        _TAB_STATE["start_timestamp"] = int(time.time())
 
     return tab_id_hex
 
@@ -266,7 +209,6 @@ def _build_payment_requirements() -> JsonDict:
         erc20_token = _normalize_address(erc20_token, field="ERC20_TOKEN")
 
     tab_id = _ensure_payment_tab(user_address, recipient_address, ttl_seconds, erc20_token)
-    req_id = _next_req_id(tab_id)
     start_ts = _TAB_STATE.get("start_timestamp")
     if start_ts is None:
         start_ts = int(time.time())
@@ -280,11 +222,10 @@ def _build_payment_requirements() -> JsonDict:
         "asset": asset_address,
         "description": description,
         "resource": resource_name,
-            "extra": {
-                "tabId": tab_id,
-                "reqId": req_id,
-                "userAddress": user_address,
-                "startTimestamp": str(start_ts),
+        "extra": {
+            "tabId": tab_id,
+            "userAddress": user_address,
+            "startTimestamp": str(start_ts),
         },
     }
 
@@ -301,7 +242,6 @@ def encode_demo_header(requirements: JsonDict) -> str:
                 "user_address": requirements["extra"]["userAddress"],
                 "recipient_address": requirements["payTo"],
                 "tab_id": requirements["extra"]["tabId"],
-                "req_id": requirements["extra"]["reqId"],
                 "amount": requirements["maxAmountRequired"],
                 "asset_address": requirements["asset"],
                 "timestamp": 1,
@@ -412,7 +352,6 @@ def create_app() -> FastAPI:
             tab_id = requirements.get("extra", {}).get("tabId")
             if tab_id is not None:
                 body["tab"] = tab_id
-                _advance_req_id(tab_id)
             if verify_response is not None:
                 body["verify"] = verify_response
             requirements_state["current"] = None
@@ -424,7 +363,6 @@ def create_app() -> FastAPI:
             tab_id = requirements.get("extra", {}).get("tabId")
             if tab_id is not None:
                 body["tab"] = tab_id
-                _advance_req_id(tab_id)
             requirements_state["current"] = None
             expected_state["value"] = None
             return JSONResponse(body)

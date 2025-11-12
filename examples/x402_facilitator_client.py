@@ -158,7 +158,6 @@ def sign_payment_claim(
     recipient_address: str,
     asset_address: str,
     tab_id: int,
-    req_id: int,
     amount: int,
     timestamp: int,
 ) -> str:
@@ -194,7 +193,6 @@ def sign_payment_claim(
                 {"name": "user", "type": "address"},
                 {"name": "recipient", "type": "address"},
                 {"name": "tabId", "type": "uint256"},
-                {"name": "reqId", "type": "uint256"},
                 {"name": "amount", "type": "uint256"},
                 {"name": "asset", "type": "address"},
                 {"name": "timestamp", "type": "uint64"},
@@ -210,7 +208,6 @@ def sign_payment_claim(
             "user": user_address,
             "recipient": recipient_address,
             "tabId": tab_id,
-            "reqId": req_id,
             "amount": amount,
             "asset": asset_address,
             "timestamp": timestamp,
@@ -329,7 +326,6 @@ class PaymentGuaranteeClaims:
     user_address: str
     recipient_address: str
     tab_id: str
-    req_id: str
     amount: str
     asset_address: str
     timestamp: int
@@ -346,7 +342,6 @@ class PaymentGuaranteeClaims:
             user_address=str(data["user_address"]),
             recipient_address=str(data["recipient_address"]),
             tab_id=str(data["tab_id"]),
-            req_id=str(data["req_id"]),
             amount=str(data["amount"]),
             asset_address=str(data["asset_address"]),
             timestamp=timestamp,
@@ -357,7 +352,6 @@ class PaymentGuaranteeClaims:
             "user_address": self.user_address,
             "recipient_address": self.recipient_address,
             "tab_id": self.tab_id,
-            "req_id": self.req_id,
             "amount": self.amount,
             "asset_address": self.asset_address,
             "timestamp": self.timestamp,
@@ -615,12 +609,11 @@ def run_auto(api: FacilitatorApi, args: argparse.Namespace) -> None:
 
         extra = requirements.extra
         tab_id_raw = _first_present(extra, "tabId", "tab_id")
-        req_id_raw = _first_present(extra, "reqId", "req_id")
         user_from_requirements = _first_present(extra, "userAddress", "user_address")
         start_ts_raw = _first_present(extra, "startTimestamp", "start_timestamp")
 
-        if tab_id_raw is None or req_id_raw is None or user_from_requirements is None:
-            raise ValueError("paymentRequirements.extra must include tabId, reqId, userAddress")
+        if tab_id_raw is None or user_from_requirements is None:
+            raise ValueError("paymentRequirements.extra must include tabId and userAddress")
 
         requirement_user_address = to_checksum_address(str(user_from_requirements))
         if requirement_user_address.lower() != signer_address.lower():
@@ -632,11 +625,6 @@ def run_auto(api: FacilitatorApi, args: argparse.Namespace) -> None:
         asset_address = to_checksum_address(requirements.asset)
 
         tab_id_int = parse_u256(tab_id_raw, field="requirements.extra.tabId")
-        req_id_int = parse_u256(req_id_raw, field="requirements.extra.reqId")
-        if start_ts_raw is None and req_id_int > 0:
-            raise ValueError(
-                "paymentRequirements.extra.startTimestamp is required once reqId exceeds 0"
-            )
 
         if args.amount:
             amount_source = args.amount
@@ -659,7 +647,6 @@ def run_auto(api: FacilitatorApi, args: argparse.Namespace) -> None:
             user_address=signer_address,
             recipient_address=recipient_address,
             tab_id=canonical_u256(tab_id_int),
-            req_id=canonical_u256(req_id_int),
             amount=canonical_u256(amount_int),
             asset_address=asset_address,
             timestamp=timestamp,
@@ -676,7 +663,6 @@ def run_auto(api: FacilitatorApi, args: argparse.Namespace) -> None:
             recipient_address=recipient_address,
             asset_address=asset_address,
             tab_id=tab_id_int,
-            req_id=req_id_int,
             amount=amount_int,
             timestamp=timestamp,
         )
