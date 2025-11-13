@@ -384,6 +384,366 @@ def build_payment_header(
     return base64.b64encode(encoded.encode("utf-8")).decode("utf-8")
 
 
+ETH_ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
+ETH_SENTINEL_ADDRESS = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+DEPOSIT_SELECTOR = "0xd0e30db0"
+DEPOSIT_STABLECOIN_SELECTOR = "0xa587f4f3"
+ERC20_APPROVE_SELECTOR = "0x095ea7b3"
+ERC20_ALLOWANCE_SELECTOR = "0xdd62ed3e"
+DEFAULT_GAS_LIMIT = 200_000
+ERC20_APPROVAL_GAS_LIMIT = 120_000
+ERC20_DEPOSIT_GAS_LIMIT = 260_000
+
+
+def ensure_collateral_for_request(
+    *,
+    core_url: str,
+    rpc_url: str,
+    contract_address: str,
+    chain_id: int,
+    signer: Any,
+    asset_address: str,
+    required_amount: int,
+    timeout: float,
+) -> None:
+    """Ensure the caller has enough collateral recorded by 4Mica core."""
+
+    if required_amount <= 0:
+        return
+
+    available, resolved_asset = _fetch_available_collateral(
+        core_url=core_url,
+        user_address=signer.address,
+        asset_address=asset_address,
+        timeout=timeout,
+    )
+    if available >= required_amount:
+        print_step(
+            "Collateral",
+            f"Available collateral {canonical_u256(available)} already covers "
+            f"required {canonical_u256(required_amount)}",
+        )
+        return
+
+    missing = required_amount - available
+    print_step(
+        "Collateral",
+        f"Insufficient collateral ({canonical_u256(available)} available) "
+        f"– depositing {canonical_u256(missing)}",
+    )
+
+    resolved_contract = contract_address
+    asset_for_chain = _normalize_asset_for_chain(resolved_asset)
+    tx_hashes: Sequence[str]
+    if _is_eth_asset(asset_for_chain):
+        tx_hash = _send_eth_deposit(
+            rpc_url=rpc_url,
+            contract_address=resolved_contract,
+            amount=missing,
+            signer=signer,
+            chain_id=chain_id,
+            timeout=timeout,
+        )
+        tx_hashes = (tx_hash,)
+    else:
+        tx_hashes = _send_erc20_deposit(
+            rpc_url=rpc_url,
+            contract_address=resolved_contract,
+            asset_address=asset_for_chain,
+            amount=missing,
+            signer=signer,
+            chain_id=chain_id,
+            timeout=timeout,
+        )
+
+    confirmations = []
+    for tx_hash in tx_hashes:
+        print_step("Collateral", f"Waiting for transaction {tx_hash} to finalize")
+        receipt = _wait_for_receipt(rpc_url, tx_hash, timeout=timeout)
+        confirmations.append(receipt.get("transactionHash", tx_hash))
+    print_step("Collateral", f"Deposit confirmed ({', '.join(confirmations)})")
+
+    updated, _ = _fetch_available_collateral(
+        core_url=core_url,
+        user_address=signer.address,
+        asset_address=asset_address,
+        timeout=timeout,
+    )
+    if updated < required_amount:
+        raise RuntimeError(
+            "deposit transaction confirmed but collateral is still below the required amount"
+        )
+    print_step(
+        "Collateral",
+        f"Collateral updated to {canonical_u256(updated)}; request requirement satisfied.",
+    )
+
+
+def _fetch_available_collateral(
+    *,
+    core_url: str,
+    user_address: str,
+    asset_address: str,
+    timeout: float,
+) -> Tuple[int, str]:
+    candidates = _asset_aliases(asset_address)
+    last_candidate = candidates[-1]
+    base = core_url.rstrip("/")
+    for candidate in candidates:
+        url = f"{base}/core/users/{user_address}/assets/{candidate}"
+        try:
+            response = requests.get(url, timeout=timeout)
+            response.raise_for_status()
+        except requests.RequestException as err:
+            raise RuntimeError(f"failed to query collateral via {url}: {err}") from err
+        try:
+            data = response.json()
+        except ValueError as err:
+            raise RuntimeError(f"invalid JSON returned by {url}") from err
+        if not data:
+            last_candidate = candidate
+            continue
+        total = parse_u256(data.get("total"), field="assetBalance.total")
+        locked = parse_u256(data.get("locked", 0), field="assetBalance.locked")
+        available = max(total - locked, 0)
+        return available, candidate
+    return 0, last_candidate
+
+
+def _asset_aliases(asset_address: str) -> Sequence[str]:
+    lowered = asset_address.lower()
+    aliases = [asset_address]
+    if lowered == ETH_SENTINEL_ADDRESS:
+        aliases.append(ETH_ZERO_ADDRESS)
+    elif lowered == ETH_ZERO_ADDRESS:
+        aliases.append(ETH_SENTINEL_ADDRESS)
+    return aliases
+
+
+def _normalize_asset_for_chain(asset_address: str) -> str:
+    if asset_address.lower() == ETH_SENTINEL_ADDRESS:
+        return ETH_ZERO_ADDRESS
+    return asset_address
+
+
+def _is_eth_asset(asset_address: str) -> bool:
+    lowered = asset_address.lower()
+    return lowered in {ETH_ZERO_ADDRESS, ETH_SENTINEL_ADDRESS}
+
+
+def _send_eth_deposit(
+    *,
+    rpc_url: str,
+    contract_address: str,
+    amount: int,
+    signer: Any,
+    chain_id: int,
+    timeout: float,
+) -> str:
+    tx = {
+        "to": contract_address,
+        "value": amount,
+        "gas": DEFAULT_GAS_LIMIT,
+        "data": DEPOSIT_SELECTOR,
+    }
+    return _send_transaction(
+        rpc_url=rpc_url,
+        tx=tx,
+        signer=signer,
+        chain_id=chain_id,
+        timeout=timeout,
+    )
+
+
+def _send_erc20_deposit(
+    *,
+    rpc_url: str,
+    contract_address: str,
+    asset_address: str,
+    amount: int,
+    signer: Any,
+    chain_id: int,
+    timeout: float,
+) -> Sequence[str]:
+    tx_hashes: list[str] = []
+    allowance = _read_erc20_allowance(
+        rpc_url=rpc_url,
+        token_address=asset_address,
+        owner=signer.address,
+        spender=contract_address,
+        timeout=timeout,
+    )
+    if allowance < amount:
+        approval_data = _encode_call_data(
+            ERC20_APPROVE_SELECTOR,
+            ["address", "uint256"],
+            [_encode_address(contract_address), amount],
+        )
+        approval_hash = _send_transaction(
+            rpc_url=rpc_url,
+            tx={
+                "to": asset_address,
+                "value": 0,
+                "gas": ERC20_APPROVAL_GAS_LIMIT,
+                "data": approval_data,
+            },
+            signer=signer,
+            chain_id=chain_id,
+            timeout=timeout,
+        )
+        tx_hashes.append(approval_hash)
+
+    deposit_data = _encode_call_data(
+        DEPOSIT_STABLECOIN_SELECTOR,
+        ["address", "uint256"],
+        [_encode_address(asset_address), amount],
+    )
+    deposit_hash = _send_transaction(
+        rpc_url=rpc_url,
+        tx={
+            "to": contract_address,
+            "value": 0,
+            "gas": ERC20_DEPOSIT_GAS_LIMIT,
+            "data": deposit_data,
+        },
+        signer=signer,
+        chain_id=chain_id,
+        timeout=timeout,
+    )
+    tx_hashes.append(deposit_hash)
+    return tuple(tx_hashes)
+
+
+def _read_erc20_allowance(
+    *,
+    rpc_url: str,
+    token_address: str,
+    owner: str,
+    spender: str,
+    timeout: float,
+) -> int:
+    data = _encode_call_data(
+        ERC20_ALLOWANCE_SELECTOR,
+        ["address", "address"],
+        [_encode_address(owner), _encode_address(spender)],
+    )
+    call = {"to": token_address, "data": data}
+    result = _rpc_request(
+        rpc_url=rpc_url,
+        method="eth_call",
+        params=[call, "latest"],
+        timeout=timeout,
+    )
+    if result is None:
+        return 0
+    return int(result, 16)
+
+
+def _encode_call_data(signature: str, arg_types: Sequence[str], args: Sequence[Any]) -> str:
+    try:
+        from eth_abi import encode as abi_encode
+    except ImportError as err:
+        raise RuntimeError(
+            "eth-abi is required for automatic collateral deposits. Install it via "
+            "pip install eth-abi (matching this interpreter)."
+        ) from err
+
+    selector = signature[2:] if signature.startswith("0x") else signature
+    encoded_args = abi_encode(arg_types, args)
+    return "0x" + (bytes.fromhex(selector) + encoded_args).hex()
+
+
+def _encode_address(value: str) -> bytes:
+    clean = value.lower()
+    if not clean.startswith("0x") or len(clean) != 42:
+        raise ValueError(f"invalid address: {value}")
+    return bytes.fromhex(clean[2:])
+
+
+def _send_transaction(
+    *,
+    rpc_url: str,
+    tx: Dict[str, Any],
+    signer: Any,
+    chain_id: int,
+    timeout: float,
+) -> str:
+    gas_price_hex = _rpc_request(rpc_url, "eth_gasPrice", [], timeout=timeout)
+    if gas_price_hex is None:
+        raise RuntimeError("ethereum RPC returned null gas price")
+    gas_price = int(gas_price_hex, 16)
+    nonce_hex = _rpc_request(
+        rpc_url,
+        "eth_getTransactionCount",
+        [signer.address, "pending"],
+        timeout=timeout,
+    )
+    if nonce_hex is None:
+        raise RuntimeError("ethereum RPC returned null nonce")
+    nonce = int(nonce_hex, 16)
+    tx_payload = {
+        "chainId": chain_id,
+        "nonce": nonce,
+        "gas": tx.get("gas", DEFAULT_GAS_LIMIT),
+        "gasPrice": tx.get("gasPrice", gas_price),
+        "to": tx["to"],
+        "value": tx.get("value", 0),
+        "data": tx.get("data", "0x"),
+    }
+    signed = signer.sign_transaction(tx_payload)
+    raw_tx = signed.raw_transaction.hex()
+    tx_hash = _rpc_request(
+        rpc_url,
+        "eth_sendRawTransaction",
+        [raw_tx],
+        timeout=timeout,
+    )
+    if tx_hash is None:
+        raise RuntimeError("ethereum RPC returned null for eth_sendRawTransaction")
+    return tx_hash
+
+
+def _wait_for_receipt(rpc_url: str, tx_hash: str, *, timeout: float) -> JsonDict:
+    deadline = time.time() + max(30.0, timeout * 2)
+    while time.time() < deadline:
+        result = _rpc_request(
+            rpc_url,
+            "eth_getTransactionReceipt",
+            [tx_hash],
+            timeout=timeout,
+        )
+        if result:
+            status_hex = result.get("status")
+            if status_hex is not None and int(status_hex, 16) != 1:
+                raise RuntimeError(f"transaction {tx_hash} failed with status {status_hex}")
+            return result
+        time.sleep(1.5)
+    raise RuntimeError(f"timed out waiting for transaction {tx_hash} to be mined")
+
+
+def _rpc_request(
+    rpc_url: str,
+    method: str,
+    params: Sequence[Any],
+    *,
+    timeout: float,
+) -> Any:
+    payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+    try:
+        response = requests.post(rpc_url, json=payload, timeout=timeout)
+        response.raise_for_status()
+        data = response.json()
+    except requests.RequestException as err:
+        raise RuntimeError(f"ethereum RPC call {method} failed: {err}") from err
+    except ValueError as err:
+        raise RuntimeError(f"ethereum RPC call {method} returned invalid JSON") from err
+    if "error" in data:
+        error = data["error"]
+        message = error.get("message", "unknown error") if isinstance(error, dict) else str(error)
+        raise RuntimeError(f"ethereum RPC call {method} failed: {message}")
+    return data.get("result")
+
+
 # ---------------------------------------------------------------------------
 # HTTP clients
 # ---------------------------------------------------------------------------
@@ -655,6 +1015,34 @@ def run_auto(api: FacilitatorApi, args: argparse.Namespace) -> None:
         print_section("Prepared Claims", pretty_json(claims.to_json()))
 
         params = fetch_core_public_params(core_url, timeout=args.timeout)
+        contract_address = params.get("contract_address")
+        if not isinstance(contract_address, str):
+            raise ValueError("core public params missing contract_address")
+        ethereum_rpc_url = params.get("ethereum_http_rpc_url")
+        if not isinstance(ethereum_rpc_url, str):
+            raise ValueError("core public params missing ethereum_http_rpc_url")
+        chain_id_value = params.get("chain_id")
+        if isinstance(chain_id_value, str):
+            try:
+                chain_id_int = int(chain_id_value, 0)
+            except ValueError as err:
+                raise ValueError("core public params chain_id must be numeric") from err
+        elif isinstance(chain_id_value, int):
+            chain_id_int = chain_id_value
+        else:
+            raise ValueError("core public params missing numeric chain_id")
+
+        ensure_collateral_for_request(
+            core_url=core_url,
+            rpc_url=ethereum_rpc_url,
+            contract_address=to_checksum_address(contract_address),
+            chain_id=chain_id_int,
+            signer=signer,
+            asset_address=asset_address,
+            required_amount=amount_int,
+            timeout=args.timeout,
+        )
+
         signature = sign_payment_claim(
             params=params,
             private_key=user_private_key,
