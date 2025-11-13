@@ -85,11 +85,9 @@ impl AppState {
                 &request.payment_requirements.scheme,
                 &request.payment_requirements.network,
             ) {
-                handler
-                    .validate_claim_only(&request.payment_header, &request.payment_requirements)?;
-                return Ok(SettleResponse::acknowledged(
-                    &request.payment_requirements.network,
-                ));
+                return handler
+                    .settle(&request.payment_header, &request.payment_requirements)
+                    .await;
             }
         }
 
@@ -141,9 +139,21 @@ impl FourMicaHandler {
         header_b64: &str,
         reqs: &PaymentRequirements,
     ) -> Result<VerifyResponse, ValidationError> {
-        let prepared = self.prepare_claim(header_b64, reqs)?;
+        self.prepare_and_validate(header_b64, reqs)?;
 
-        self.ensure_claims_match_requirements(&prepared.claims, reqs)?;
+        Ok(VerifyResponse {
+            is_valid: true,
+            invalid_reason: None,
+            certificate: None,
+        })
+    }
+
+    async fn settle(
+        &self,
+        header_b64: &str,
+        reqs: &PaymentRequirements,
+    ) -> Result<SettleResponse, ValidationError> {
+        let prepared = self.prepare_and_validate(header_b64, reqs)?;
 
         let certificate = self
             .issuer
@@ -162,24 +172,13 @@ impl FourMicaHandler {
             tab_id = format!("{:#x}", claims.tab_id),
             req_id = format!("{:#x}", claims.req_id),
             amount = format!("{:#x}", claims.amount),
-            "4Mica guarantee issued"
+            "4Mica guarantee issued during settlement"
         );
 
-        Ok(VerifyResponse {
-            is_valid: true,
-            invalid_reason: None,
-            certificate: Some(certificate.into()),
-        })
-    }
-
-    fn validate_claim_only(
-        &self,
-        header_b64: &str,
-        reqs: &PaymentRequirements,
-    ) -> Result<(), ValidationError> {
-        let prepared = self.prepare_claim(header_b64, reqs)?;
-        self.ensure_claims_match_requirements(&prepared.claims, reqs)?;
-        Ok(())
+        Ok(SettleResponse::four_mica_success(
+            &self.network,
+            certificate.into(),
+        ))
     }
 
     fn prepare_claim(
@@ -218,6 +217,16 @@ impl FourMicaHandler {
             signature: signature.to_string(),
             scheme,
         })
+    }
+
+    fn prepare_and_validate(
+        &self,
+        header_b64: &str,
+        reqs: &PaymentRequirements,
+    ) -> Result<PreparedClaim, ValidationError> {
+        let prepared = self.prepare_claim(header_b64, reqs)?;
+        self.ensure_claims_match_requirements(&prepared.claims, reqs)?;
+        Ok(prepared)
     }
 
     fn ensure_claims_match_requirements(
@@ -403,31 +412,25 @@ impl From<BLSCert> for CertificateResponse {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SettleResponse {
     pub success: bool,
     pub error: Option<String>,
     pub tx_hash: Option<String>,
     pub network_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub certificate: Option<CertificateResponse>,
 }
 
 impl SettleResponse {
-    pub fn acknowledged(network: &str) -> Self {
-        Self {
-            success: true,
-            error: None,
-            tx_hash: None,
-            network_id: Some(network.to_string()),
-        }
-    }
-
     pub fn invalid(reason: String, network: &str) -> Self {
         Self {
             success: false,
             error: Some(reason),
             tx_hash: None,
             network_id: Some(network.to_string()),
+            certificate: None,
         }
     }
 
@@ -442,6 +445,17 @@ impl SettleResponse {
             error,
             tx_hash,
             network_id: Some(network),
+            certificate: None,
+        }
+    }
+
+    pub fn four_mica_success(network: &str, certificate: CertificateResponse) -> Self {
+        Self {
+            success: true,
+            error: None,
+            tx_hash: None,
+            network_id: Some(network.to_string()),
+            certificate: Some(certificate),
         }
     }
 }

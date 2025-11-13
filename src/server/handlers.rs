@@ -68,11 +68,10 @@ async fn settle_handler(
 
     match state.settle(&request).await {
         Ok(response) => {
-            if response.tx_hash.is_some() {
-                info!(
-                    tx_hash = response.tx_hash.as_deref().unwrap(),
-                    "settlement forwarded to on-chain handler"
-                );
+            if let Some(tx_hash) = response.tx_hash.as_deref() {
+                info!(tx_hash, "settlement forwarded to on-chain handler");
+            } else if response.certificate.is_some() {
+                info!("settlement completed with 4Mica guarantee");
             } else {
                 info!("settlement acknowledged (deferred)");
             }

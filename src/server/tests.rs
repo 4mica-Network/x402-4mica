@@ -48,9 +48,9 @@ async fn verify_endpoint_accepts_valid_payload() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let payload: VerifyResponse = serde_json::from_slice(&body).unwrap();
     assert!(payload.is_valid);
-    assert!(payload.certificate.is_some());
-    assert_eq!(verifier.verify_calls(), 1);
-    assert_eq!(issuer.issue_calls(), 1);
+    assert!(payload.certificate.is_none());
+    assert_eq!(verifier.verify_calls(), 0);
+    assert_eq!(issuer.issue_calls(), 0);
 }
 
 #[tokio::test]
@@ -66,7 +66,7 @@ async fn verify_accepts_duplicate_payloads() {
         payment_requirements: sample_requirements(),
     };
 
-    // First verification issues a new certificate.
+    // First verification performs only preflight validation.
     let response = router
         .clone()
         .oneshot(post_json("/verify", &request_body))
@@ -76,9 +76,9 @@ async fn verify_accepts_duplicate_payloads() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let payload: VerifyResponse = serde_json::from_slice(&body).unwrap();
     assert!(payload.is_valid);
-    assert!(payload.certificate.is_some());
+    assert!(payload.certificate.is_none());
 
-    // Second verification with the same payload succeeds by issuing a fresh certificate.
+    // Second verification with the same payload succeeds without calling downstream services.
     let response = router
         .oneshot(post_json("/verify", &request_body))
         .await
@@ -87,12 +87,12 @@ async fn verify_accepts_duplicate_payloads() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let payload: VerifyResponse = serde_json::from_slice(&body).unwrap();
     assert!(payload.is_valid);
-    assert!(payload.certificate.is_some());
-    assert_eq!(issuer.issue_calls(), 2);
+    assert!(payload.certificate.is_none());
+    assert_eq!(issuer.issue_calls(), 0);
 }
 
 #[tokio::test]
-async fn settle_endpoint_acknowledges_valid_payment() {
+async fn settle_endpoint_returns_certificate() {
     let verifier = Arc::new(MockVerifier::success());
     let issuer = Arc::new(MockIssuer::success());
     let state = test_state(verifier.clone(), issuer.clone());
@@ -111,11 +111,13 @@ async fn settle_endpoint_acknowledges_valid_payment() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    let payload: Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(payload["success"], true);
-    assert!(payload["txHash"].is_null());
-    assert_eq!(verifier.verify_calls(), 0);
-    assert_eq!(issuer.issue_calls(), 0);
+    let payload: SettleResponse = serde_json::from_slice(&body).unwrap();
+    assert!(payload.success);
+    assert!(payload.certificate.is_some());
+    assert!(payload.tx_hash.is_none());
+    assert_eq!(payload.network_id.as_deref(), Some("4mica-mainnet"));
+    assert_eq!(verifier.verify_calls(), 1);
+    assert_eq!(issuer.issue_calls(), 1);
 }
 
 #[tokio::test]
@@ -231,61 +233,55 @@ async fn verify_rejects_invalid_version() {
 }
 
 #[tokio::test]
-async fn verify_propagates_issue_errors() {
+async fn settle_propagates_issue_errors() {
     let verifier = Arc::new(MockVerifier::success());
     let issuer = Arc::new(MockIssuer::failing());
     let state = test_state(verifier.clone(), issuer.clone());
     let router = build_router(state);
 
-    let request_body = VerifyRequest {
+    let request_body = SettleRequest {
         x402_version: 1,
         payment_header: encoded_header(),
         payment_requirements: sample_requirements(),
     };
 
     let response = router
-        .oneshot(post_json("/verify", &request_body))
+        .oneshot(post_json("/settle", &request_body))
         .await
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    let payload: VerifyResponse = serde_json::from_slice(&body).unwrap();
-    assert!(!payload.is_valid);
-    assert!(
-        payload
-            .invalid_reason
-            .as_deref()
-            .unwrap()
-            .contains("issue failure")
-    );
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["success"], false);
+    assert!(payload["error"].as_str().unwrap().contains("issue failure"));
     assert_eq!(verifier.verify_calls(), 0);
     assert_eq!(issuer.issue_calls(), 1);
 }
 
 #[tokio::test]
-async fn verify_propagates_certificate_errors() {
+async fn settle_propagates_certificate_errors() {
     let verifier = Arc::new(MockVerifier::failing());
     let issuer = Arc::new(MockIssuer::success());
     let state = test_state(verifier.clone(), issuer.clone());
     let router = build_router(state);
 
-    let request_body = VerifyRequest {
+    let request_body = SettleRequest {
         x402_version: 1,
         payment_header: encoded_header(),
         payment_requirements: sample_requirements(),
     };
 
     let response = router
-        .oneshot(post_json("/verify", &request_body))
+        .oneshot(post_json("/settle", &request_body))
         .await
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    let payload: VerifyResponse = serde_json::from_slice(&body).unwrap();
-    assert!(!payload.is_valid);
-    assert_eq!(payload.invalid_reason.as_deref(), Some("verify failure"));
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["success"], false);
+    assert_eq!(payload["error"].as_str(), Some("verify failure"));
     assert_eq!(verifier.verify_calls(), 1);
     assert_eq!(issuer.issue_calls(), 1);
 }
@@ -318,6 +314,7 @@ async fn settle_rejects_invalid_version() {
             .unwrap()
             .contains("unsupported x402Version")
     );
+    assert!(payload["certificate"].is_null());
     assert_eq!(verifier.verify_calls(), 0);
     assert_eq!(issuer.issue_calls(), 0);
 }
@@ -531,6 +528,7 @@ async fn settle_routes_to_exact_service() {
     let payload: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["success"], true);
     assert_eq!(payload["txHash"], "0xdeadbeef");
+    assert!(payload["certificate"].is_null());
     assert_eq!(exact.settle_calls(), 1);
 }
 
