@@ -32,19 +32,21 @@ facilitator from `x402-rs`, exposing those `(scheme, network)` pairs on `/suppor
 The sequence below highlights each HTTP request, who sends it, and how data travels through
 x402-4Mica and the 4Mica core service.
 
-1. **Recipient opens or refreshes a tab**
-   - Recipient → Facilitator: `POST /tabs` with `{ userAddress, recipientAddress, erc20Token?, ttlSeconds? }`.
-   - Facilitator → 4Mica core: `POST core/payment-tabs` using the supplied body.
-   - 4Mica core → Facilitator: tab metadata (`id`).
+1. **Client discovers the paywall**
+   - Client → Recipient resource: request protected content.
+   - Recipient → Client: `402 Payment Required` that advertises the supported `(scheme, network)`
+     and instructs the client where to request a payment tab (for example, `POST /tab` with their
+     wallet address). No per-user data is known yet.
+2. **Client requests a tab**
+   - Client → Recipient resource: `POST /tab` (or an equivalent endpoint) with their
+     `{ userAddress, erc20Token?, ttlSeconds? }`.
+   - Recipient → Facilitator: `POST /tabs` using the supplied body. The facilitator will reuse the
+     existing tab for that `(user, recipient, asset)` pair or create a fresh one.
+   - Facilitator → 4Mica core: `POST core/payment-tabs` whenever a new tab is required.
    - Facilitator → Recipient: `{ tabId, userAddress, recipientAddress, assetAddress, startTimestamp, ttlSeconds }`.
-     The `tabId` becomes part of every `paymentRequirements.extra.tabId`.
-2. **Client discovers the paywall**
-   - Client → Recipient resource: request missing credit evidence.
-   - Recipient → Client: `402 Payment Required` that embeds the latest
-     `paymentRequirements`. For the 4Mica scheme the `.extra` field **must** include:
-     - `tabId` – decimal or hex string returned by `/tabs`.
-     - `userAddress` – checksum wallet required to sign the claim.
-     The body also defines `scheme`, `network`, `payTo`, `asset`, and `maxAmountRequired`.
+     The recipient stores this tab metadata for the user.
+   - Recipient → Client: `paymentRequirements` that include the newly issued `tabId` and the wallet
+     they just learned from the client.
 3. **Client signs a guarantee**
    - Client builds the JSON payload that matches the resource requirements, signs it with their
      private key (EIP‑712 by default; EIP‑191 is also accepted), and wraps the result in a base64
@@ -84,9 +86,10 @@ x402-4Mica and the 4Mica core service.
   resulting `X-PAYMENT` header when retrying the protected request.
 
 **Recipient / resource server**
-- Keep track of the tab returned from `POST /tabs` (and refresh it when TTLs lapse).
-- Embed `tabId`, `userAddress`, the desired `payTo`, and the tightest `maxAmountRequired` in the
-  `paymentRequirements` they return in `402` responses.
+- When a wallet requests credit, forward `{ userAddress, recipientAddress, ... }` to the facilitator
+  via `POST /tabs`, caching the returned tab per user and refreshing it when TTLs lapse.
+- Embed the resulting `tabId`, `userAddress`, the desired `payTo`, and the tightest
+  `maxAmountRequired` in the `paymentRequirements` they hand back to that user.
 - Call `/verify` whenever an `X-PAYMENT` header appears to ensure the signature, scheme, and tab data
   all line up before trusting the client’s retry.
 - Call `/settle` once the resource work is ready to complete; persist the returned certificate as
@@ -101,7 +104,8 @@ x402-4Mica and the 4Mica core service.
   - Request: `{ "userAddress", "recipientAddress", "erc20Token"?, "ttlSeconds"? }`.
     Use `erc20Token = null` (or omit it) for ETH tabs; otherwise pass the token contract address.
   - Response: `{ "tabId", "userAddress", "recipientAddress", "assetAddress", "startTimestamp", "ttlSeconds" }`.
-    `tabId` is always emitted as a canonical hex string.
+    `tabId` is always emitted as a canonical hex string. Recipients call this after a user shares
+    their wallet; the facilitator reuses the existing tab for that pair whenever possible.
 - `POST /verify`
   - Request: `{ "x402Version": 1, "paymentHeader": "<base64 X-PAYMENT>", "paymentRequirements": { ... } }`.
   - Response: `{ "isValid": true|false, "invalidReason"?, "certificate": null }`.

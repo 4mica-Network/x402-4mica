@@ -29,6 +29,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence, Tuple, Union
+from urllib.parse import urljoin
 
 
 def _bootstrap_local_site_packages() -> None:
@@ -922,7 +923,9 @@ class ResourceServerClient:
     def close(self) -> None:
         self._session.close()
 
-    def fetch_requirements(self, url: str, method: str = "GET") -> Tuple[PaymentRequirements, JsonDict]:
+    def fetch_requirements(
+        self, url: str, method: str = "GET", user_address: Optional[str] = None
+    ) -> Tuple[PaymentRequirements, JsonDict]:
         request_func = getattr(self._session, method.lower(), None)
         if request_func is None:
             raise ValueError(f"unsupported HTTP method: {method}")
@@ -935,10 +938,38 @@ class ResourceServerClient:
 
         payload = response.json()
         requirements_raw = payload.get("paymentRequirements")
-        if requirements_raw is None:
-            raise ValueError("response does not include paymentRequirements")
-        requirements = PaymentRequirements.from_dict(requirements_raw)
-        return requirements, payload
+        if requirements_raw is not None:
+            requirements = PaymentRequirements.from_dict(requirements_raw)
+            return requirements, payload
+
+        tab_endpoint = payload.get("tabEndpoint")
+        if tab_endpoint and user_address:
+            tab_payload = self._request_tab(response.url, tab_endpoint, user_address)
+            tab_requirements = tab_payload.get("paymentRequirements")
+            if tab_requirements is None:
+                raise ValueError("tab endpoint response missing paymentRequirements")
+            requirements = PaymentRequirements.from_dict(tab_requirements)
+            combined = dict(payload)
+            combined["tabResponse"] = tab_payload
+            combined["paymentRequirements"] = tab_requirements
+            return requirements, combined
+
+        if tab_endpoint and not user_address:
+            raise ValueError(
+                "resource requires a payment tab; provide --user-address or configure USER_ADDRESS"
+            )
+
+        raise ValueError("response does not include paymentRequirements")
+
+    def _request_tab(self, base_url: str, endpoint: str, user_address: str) -> JsonDict:
+        tab_url = urljoin(base_url, endpoint)
+        response = self._session.post(
+            tab_url,
+            json={"userAddress": user_address},
+            timeout=self.timeout,
+        )
+        response.raise_for_status()
+        return response.json()
 
 
 # ---------------------------------------------------------------------------
@@ -1015,11 +1046,11 @@ def run_settle(api: FacilitatorApi, args: argparse.Namespace) -> None:
 
 
 def _fetch_resource_requirements(
-    resource_url: str, method: str, timeout: float
+    resource_url: str, method: str, timeout: float, user_address: Optional[str] = None
 ) -> Tuple[PaymentRequirements, JsonDict]:
     client = ResourceServerClient(timeout=timeout)
     try:
-        return client.fetch_requirements(resource_url, method)
+        return client.fetch_requirements(resource_url, method, user_address=user_address)
     finally:
         client.close()
 
@@ -1027,7 +1058,7 @@ def _fetch_resource_requirements(
 def run_discover(_: FacilitatorApi, args: argparse.Namespace) -> None:
     print_step("Client", f"Calling paid API at {args.resource_url}")
     requirements, raw_payload = _fetch_resource_requirements(
-        args.resource_url, args.method, args.timeout
+        args.resource_url, args.method, args.timeout, user_address=args.user_address
     )
 
     print_section("Resource Server Response", pretty_json(raw_payload))
@@ -1118,7 +1149,7 @@ def _prepare_credit_payment(
 
     print_step("Client", f"Calling paid API at {args.resource_url}")
     requirements, discovery_payload = _fetch_resource_requirements(
-        args.resource_url, args.method, timeout
+        args.resource_url, args.method, timeout, user_address=signer_address
     )
 
     print_section("Resource Server Response", pretty_json(discovery_payload))
@@ -1223,7 +1254,7 @@ def _prepare_debit_payment(
 ) -> Tuple[PaymentRequirements, str, JsonDict]:
     print_step("Client", f"Calling paid API at {args.resource_url}")
     requirements, discovery_payload = _fetch_resource_requirements(
-        args.resource_url, args.method, timeout
+        args.resource_url, args.method, timeout, user_address=signer_address
     )
 
     print_section("Resource Server Response", pretty_json(discovery_payload))
@@ -1469,6 +1500,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--method",
         default="GET",
         help="HTTP method to use (default: %(default)s).",
+    )
+    discover_parser.add_argument(
+        "--user-address",
+        help="Wallet address to include when requesting a tab from the resource server.",
     )
     discover_parser.set_defaults(handler=run_discover)
 

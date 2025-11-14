@@ -3,8 +3,9 @@
 Mock paid API that uses the x402 payment protocol to protect a resource.
 
 The mock server acts as the resource server from the protocol diagram:
-  • When a client calls the paid endpoint without a payment, respond with 402
-    and embed `paymentRequirements` describing what has to be signed.
+  • When a client calls the paid endpoint without a payment, respond with 402,
+    advertise the supported scheme/network, and point the client at `/tab`
+    so they can request a tab with their wallet address.
   • If a client supplies an X-PAYMENT header the server asks the facilitator to
     verify it and, on success, returns the protected resource payload. A static
     fallback signature is still accepted for quick smoke tests.
@@ -20,6 +21,7 @@ requirements easily when extending the example.
 from __future__ import annotations
 
 import base64
+import binascii
 import json
 import os
 import time
@@ -43,8 +45,7 @@ DEFAULT_RESOURCE = "mock-paid-endpoint"
 DEFAULT_FACILITATOR_URL = "http://localhost:8080"
 
 _ENV_FILE_CACHE: Optional[Dict[str, str]] = None
-_REQUIREMENTS_CACHE: Optional[JsonDict] = None
-_TAB_STATE: Dict[str, Any] = {"tab_id": None, "start_timestamp": None, "asset_address": None}
+_TAB_STATE: Dict[str, Dict[str, Any]] = {}
 
 
 def _load_env_file() -> Dict[str, str]:
@@ -136,57 +137,73 @@ def _ensure_payment_tab(
     recipient_address: str,
     ttl_seconds: Optional[int],
     erc20_token: Optional[str],
-) -> str:
-    existing = _TAB_STATE.get("tab_id")
-    if existing is None:
-        facilitator_url = _config_value(
-            "FACILITATOR_URL",
-            required=False,
-            default=DEFAULT_FACILITATOR_URL,
-        )
-        url = f"{facilitator_url.rstrip('/')}/tabs"
-        payload = {
-            # Facilitator accepts camelCase aliases, but mixing both styles
-            # results in duplicate-field errors from serde. Stick to snake_case.
-            "user_address": user_address,
-            "recipient_address": recipient_address,
-            "erc20_token": erc20_token,
-            "ttl_seconds": ttl_seconds,
-        }
+) -> Dict[str, Any]:
+    existing = _TAB_STATE.get(user_address)
+    now = int(time.time())
+    if existing is not None:
+        stored_ttl = existing.get("ttl_seconds")
+        start_ts = existing.get("start_timestamp", now)
+        if stored_ttl and stored_ttl > 0 and (start_ts + stored_ttl) <= now:
+            existing = None
+        else:
+            return dict(existing)
 
+    facilitator_url = _config_value(
+        "FACILITATOR_URL",
+        required=False,
+        default=DEFAULT_FACILITATOR_URL,
+    )
+    url = f"{facilitator_url.rstrip('/')}/tabs"
+    payload = {
+        "user_address": user_address,
+        "recipient_address": recipient_address,
+        "erc20_token": erc20_token,
+        "ttl_seconds": ttl_seconds,
+    }
+
+    try:
+        response = requests.post(url, json=payload, timeout=10)
+        response.raise_for_status()
+    except requests.HTTPError as err:
+        message = _extract_error_from_response(err.response)
+        raise RuntimeError(
+            f"Facilitator rejected payment tab ({err.response.status_code}): {message}"
+        ) from err
+    except requests.RequestException as err:
+        raise RuntimeError(f"Failed to request payment tab via facilitator at {url}: {err}") from err
+
+    data = response.json()
+    tab_id = data.get("tabId")
+    if tab_id is None:
+        raise RuntimeError("Facilitator response missing tabId.")
+
+    def _parse_int(value: Any, *, field: str, default: int) -> int:
+        if value is None:
+            return default
         try:
-            response = requests.post(url, json=payload, timeout=10)
-            response.raise_for_status()
-        except requests.HTTPError as err:
-            message = _extract_error_from_response(err.response)
-            raise RuntimeError(
-                f"Facilitator rejected payment tab ({err.response.status_code}): {message}"
-            ) from err
-        except requests.RequestException as err:
-            raise RuntimeError(
-                f"Failed to request payment tab via facilitator at {url}: {err}"
-            ) from err
+            return int(value)
+        except (TypeError, ValueError) as err:
+            raise RuntimeError(f"Facilitator response included invalid {field}") from err
 
-        data = response.json()
-        tab_id = data.get("tabId")
-        if tab_id is None:
-            raise RuntimeError("Facilitator response missing tabId.")
-        _TAB_STATE["tab_id"] = str(tab_id)
-        start_ts_value = data.get("startTimestamp")
-        if start_ts_value is not None:
-            try:
-                _TAB_STATE["start_timestamp"] = int(start_ts_value)
-            except (TypeError, ValueError) as err:
-                raise RuntimeError("Facilitator response included invalid startTimestamp") from err
-        if data.get("assetAddress"):
-            _TAB_STATE["asset_address"] = str(data["assetAddress"])
-    else:
-        tab_id = existing
+    start_timestamp = _parse_int(
+        data.get("startTimestamp"),
+        field="startTimestamp",
+        default=now,
+    )
+    ttl_value = _parse_int(
+        data.get("ttlSeconds"),
+        field="ttlSeconds",
+        default=ttl_seconds or 0,
+    )
 
-    if _TAB_STATE.get("start_timestamp") is None:
-        _TAB_STATE["start_timestamp"] = int(time.time())
-
-    return tab_id
+    tab_state = {
+        "tab_id": str(tab_id),
+        "asset_address": data.get("assetAddress"),
+        "start_timestamp": start_timestamp,
+        "ttl_seconds": ttl_value,
+    }
+    _TAB_STATE[user_address] = tab_state
+    return dict(tab_state)
 
 
 def _extract_error_from_response(response: Optional[requests.Response]) -> str:
@@ -202,14 +219,7 @@ def _extract_error_from_response(response: Optional[requests.Response]) -> str:
     return response.text.strip() or "unknown error"
 
 
-def _build_payment_requirements() -> JsonDict:
-    # Ensure required values exist (even if unused in this module yet).
-    _config_value("USER_PRIVATE_KEY")
-
-    user_address = _normalize_address(
-        _config_value("USER_ADDRESS"),
-        field="USER_ADDRESS",
-    )
+def _build_payment_requirements(user_address: str) -> JsonDict:
     recipient_address = _normalize_address(
         _config_value("RECIPIENT_ADDRESS"),
         field="RECIPIENT_ADDRESS",
@@ -241,11 +251,14 @@ def _build_payment_requirements() -> JsonDict:
     if erc20_token:
         erc20_token = _normalize_address(erc20_token, field="ERC20_TOKEN")
 
-    tab_id = _ensure_payment_tab(user_address, recipient_address, ttl_seconds, erc20_token)
-    start_ts = _TAB_STATE.get("start_timestamp")
-    if start_ts is None:
-        start_ts = int(time.time())
-        _TAB_STATE["start_timestamp"] = start_ts
+    tab_data = _ensure_payment_tab(user_address, recipient_address, ttl_seconds, erc20_token)
+    tab_id = tab_data["tab_id"]
+    start_ts = tab_data.get("start_timestamp", int(time.time()))
+    tab_asset = tab_data.get("asset_address")
+    if tab_asset:
+        asset_address = _normalize_address(tab_asset, field="assetAddress")
+    else:
+        asset_address = configured_asset
 
     requirements: JsonDict = {
         "scheme": scheme,
@@ -263,6 +276,75 @@ def _build_payment_requirements() -> JsonDict:
     }
 
     return requirements
+
+
+def _requirements_template() -> JsonDict:
+    recipient_address = _normalize_address(
+        _config_value("RECIPIENT_ADDRESS"),
+        field="RECIPIENT_ADDRESS",
+    )
+    configured_asset = _normalize_address(
+        _config_value("ASSET_ADDRESS", required=False, default=DEFAULT_ASSET),
+        field="ASSET_ADDRESS",
+    )
+
+    max_amount_required = _as_hex_u256(
+        _config_value("MAX_AMOUNT_WEI", required=False, default=DEFAULT_MAX_AMOUNT)
+    )
+    description = _config_value("PAYMENT_DESCRIPTION", required=False, default=DEFAULT_DESCRIPTION)
+    resource_name = _config_value("PAYMENT_RESOURCE", required=False, default=DEFAULT_RESOURCE)
+    scheme = _config_value("X402_SCHEME", required=False, default=DEFAULT_SCHEME)
+    network = _config_value("X402_NETWORK", required=False, default=DEFAULT_NETWORK)
+
+    template: JsonDict = {
+        "scheme": scheme,
+        "network": network,
+        "maxAmountRequired": max_amount_required,
+        "payTo": recipient_address,
+        "asset": configured_asset,
+        "description": description,
+        "resource": resource_name,
+        "extra": None,
+    }
+    return template
+
+
+def _load_custom_requirements() -> Optional[JsonDict]:
+    raw = os.environ.get("MOCK_REQUIREMENTS_JSON")
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except ValueError as err:
+        raise RuntimeError("MOCK_REQUIREMENTS_JSON must contain valid JSON") from err
+
+
+def _maybe_normalize_address(value: Any, *, field: str) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    try:
+        return _normalize_address(value, field=field)
+    except RuntimeError:
+        return None
+
+
+def _user_address_from_header(header: str) -> Optional[str]:
+    trimmed = header.strip()
+    if not trimmed:
+        return None
+    try:
+        decoded = base64.b64decode(trimmed)
+        payload = json.loads(decoded)
+    except (ValueError, binascii.Error):
+        return None
+
+    claims_payload = payload.get("payload")
+    if not isinstance(claims_payload, dict):
+        return None
+    claims = claims_payload.get("claims")
+    if not isinstance(claims, dict):
+        return None
+    return _maybe_normalize_address(claims.get("user_address"), field="claims.user_address")
 
 
 def encode_demo_header(requirements: JsonDict) -> str:
@@ -285,18 +367,6 @@ def encode_demo_header(requirements: JsonDict) -> str:
     }
     encoded = json.dumps(payload, separators=(",", ":"))
     return base64.b64encode(encoded.encode("utf-8")).decode("utf-8")
-
-
-def payment_requirements(*, refresh: bool = False) -> JsonDict:
-    raw = os.environ.get("MOCK_REQUIREMENTS_JSON")
-    if raw:
-        return json.loads(raw)
-
-    global _REQUIREMENTS_CACHE
-    if refresh or _REQUIREMENTS_CACHE is None:
-        _REQUIREMENTS_CACHE = _build_payment_requirements()
-    # return a copy so callers can mutate safely
-    return json.loads(json.dumps(_REQUIREMENTS_CACHE))
 
 
 def expected_header(requirements: JsonDict) -> str:
@@ -332,50 +402,104 @@ def verify_with_facilitator(
 def create_app() -> FastAPI:
     app = FastAPI(title="Mock Paid API")
 
-    requirements_state: Dict[str, Optional[JsonDict]] = {"current": None}
-    expected_state: Dict[str, Optional[str]] = {"value": None}
+    requirements_state: Dict[str, JsonDict] = {}
+    expected_state: Dict[str, Optional[str]] = {}
     facilitator_url = _config_value(
         "FACILITATOR_URL",
         required=False,
         default=DEFAULT_FACILITATOR_URL,
     )
+    template_requirements = _requirements_template()
+    tab_endpoint = "/tab"
 
-    def refresh_requirements() -> JsonDict:
-        reqs = payment_requirements(refresh=True)
-        requirements_state["current"] = reqs
-        expected_state["value"] = expected_header(reqs)
-        return reqs
+    def _clone_requirements(requirements: JsonDict) -> JsonDict:
+        return json.loads(json.dumps(requirements))
 
-    def current_requirements() -> JsonDict:
-        if requirements_state["current"] is None:
-            return refresh_requirements()
-        return requirements_state["current"]
+    def _record_requirements(user_address: str, requirements: JsonDict) -> None:
+        requirements_state[user_address] = _clone_requirements(requirements)
+        expected_state[user_address] = expected_header(requirements)
+
+    def _active_requirements(user_address: str) -> Optional[JsonDict]:
+        entry = requirements_state.get(user_address)
+        if entry is None:
+            return None
+        return _clone_requirements(entry)
+
+    def _clear_user_state(user_address: str) -> None:
+        requirements_state.pop(user_address, None)
+        expected_state.pop(user_address, None)
 
     @app.get("/")
     async def index() -> JsonDict:
         return {
             "message": "Mock paid API",
             "protected": "/protected",
-            "hint": "Call /protected without X-PAYMENT to receive paymentRequirements.",
+            "hint": "Call /protected without X-PAYMENT to discover the required scheme.",
         }
+
+    @app.post("/tab")
+    async def issue_tab(payload: JsonDict) -> JSONResponse:
+        user_address_raw = payload.get("userAddress") or payload.get("user_address")
+        if not isinstance(user_address_raw, str):
+            body = {"error": "userAddress is required"}
+            return JSONResponse(body, status_code=status.HTTP_400_BAD_REQUEST)
+        try:
+            user_address = _normalize_address(user_address_raw, field="userAddress")
+        except RuntimeError as err:
+            return JSONResponse({"error": str(err)}, status_code=status.HTTP_400_BAD_REQUEST)
+
+        override = _load_custom_requirements()
+        if override is not None:
+            requirements = _clone_requirements(override)
+        else:
+            requirements = _build_payment_requirements(user_address)
+        _record_requirements(user_address, requirements)
+
+        extra = requirements.get("extra") or {}
+        response_body: JsonDict = {
+            "tabId": extra.get("tabId"),
+            "paymentRequirements": requirements,
+        }
+        if extra.get("startTimestamp"):
+            response_body["startTimestamp"] = extra["startTimestamp"]
+        response_body["userAddress"] = user_address
+        return JSONResponse(response_body)
 
     @app.get("/protected")
     async def protected_resource(
         x_payment: Optional[str] = Header(default=None, alias="X-PAYMENT")
     ) -> JSONResponse:
         if x_payment is None:
-            reqs = refresh_requirements()
             response_body = {
                 "error": "payment required",
-                "paymentRequirements": reqs,
+                "paymentRequirementsTemplate": template_requirements,
+                "tabEndpoint": tab_endpoint,
+                "hint": "Send POST /tab with { userAddress } to mint payment requirements for your wallet.",
             }
             return JSONResponse(response_body, status_code=status.HTTP_402_PAYMENT_REQUIRED)
 
-        requirements = current_requirements()
-        expected = expected_state["value"]
+        user_address = _user_address_from_header(x_payment)
+        if user_address is None:
+            response_body = {
+                "error": "invalid payment header",
+                "hint": "Unable to extract user address; request a tab and retry.",
+                "tabEndpoint": tab_endpoint,
+            }
+            return JSONResponse(response_body, status_code=status.HTTP_402_PAYMENT_REQUIRED)
+
+        requirements = _active_requirements(user_address)
+        if requirements is None:
+            response_body = {
+                "error": "tab required",
+                "hint": "Call POST /tab with your wallet to receive paymentRequirements.",
+                "tabEndpoint": tab_endpoint,
+            }
+            return JSONResponse(response_body, status_code=status.HTTP_402_PAYMENT_REQUIRED)
+
+        expected = expected_state.get(user_address)
         if expected is None:
             expected = expected_header(requirements)
-            expected_state["value"] = expected
+            expected_state[user_address] = expected
 
         success, verify_response, failure_reason = verify_with_facilitator(
             facilitator_url, x_payment, requirements
@@ -387,8 +511,7 @@ def create_app() -> FastAPI:
                 body["tab"] = tab_id
             if verify_response is not None:
                 body["verify"] = verify_response
-            requirements_state["current"] = None
-            expected_state["value"] = None
+            _clear_user_state(user_address)
             return JSONResponse(body)
 
         if x_payment == expected:
@@ -396,13 +519,13 @@ def create_app() -> FastAPI:
             tab_id = requirements.get("extra", {}).get("tabId")
             if tab_id is not None:
                 body["tab"] = tab_id
-            requirements_state["current"] = None
-            expected_state["value"] = None
+            _clear_user_state(user_address)
             return JSONResponse(body)
 
         response_body = {
             "error": "payment required",
             "paymentRequirements": requirements,
+            "tabEndpoint": tab_endpoint,
         }
         if failure_reason:
             response_body["hint"] = failure_reason
@@ -410,8 +533,6 @@ def create_app() -> FastAPI:
             response_body["hint"] = "header does not match the demo signature"
         if verify_response is not None:
             response_body["facilitatorResponse"] = verify_response
-        requirements_state["current"] = None
-        expected_state["value"] = None
         return JSONResponse(response_body, status_code=status.HTTP_402_PAYMENT_REQUIRED)
 
     return app
