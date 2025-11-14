@@ -1,7 +1,13 @@
-use std::{str::FromStr, sync::Arc};
+use std::{
+    str::FromStr,
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use async_trait::async_trait;
+use axum::http::StatusCode;
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use reqwest::{Client, Url};
 use rust_sdk_4mica::{
     Address, BLSCert, PaymentGuaranteeClaims, PaymentGuaranteeRequestClaims, SigningScheme, U256,
 };
@@ -9,21 +15,31 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::issuer::GuaranteeIssuer;
+use crate::issuer::{GuaranteeIssuer, parse_error_message};
 use crate::verifier::CertificateValidator;
 
 const SUPPORTED_VERSION: u8 = 1;
+const ETH_SENTINEL_ADDRESS: &str = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
 
 pub(super) type SharedState = Arc<AppState>;
 
 pub(crate) struct AppState {
     four_mica: Option<FourMicaHandler>,
+    tab_service: Option<Arc<dyn TabService>>,
     exact: Option<Arc<dyn ExactService>>,
 }
 
 impl AppState {
-    pub fn new(four_mica: Option<FourMicaHandler>, exact: Option<Arc<dyn ExactService>>) -> Self {
-        Self { four_mica, exact }
+    pub fn new(
+        four_mica: Option<FourMicaHandler>,
+        tab_service: Option<Arc<dyn TabService>>,
+        exact: Option<Arc<dyn ExactService>>,
+    ) -> Self {
+        Self {
+            four_mica,
+            tab_service,
+            exact,
+        }
     }
 
     pub fn network(&self) -> &str {
@@ -98,6 +114,16 @@ impl AppState {
         Err(ValidationError::UnsupportedScheme(
             request.payment_requirements.scheme.clone(),
         ))
+    }
+
+    pub async fn create_tab(
+        &self,
+        request: &CreateTabRequest,
+    ) -> Result<CreateTabResponse, TabError> {
+        match &self.tab_service {
+            Some(service) => service.create_tab(request).await,
+            None => Err(TabError::Unsupported),
+        }
     }
 }
 
@@ -321,6 +347,124 @@ impl FourMicaHandler {
 }
 
 #[async_trait]
+pub(crate) trait TabService: Send + Sync {
+    async fn create_tab(
+        &self,
+        request: &CreateTabRequest,
+    ) -> Result<CreateTabResponse, TabError>;
+}
+
+#[derive(Clone)]
+pub(crate) struct CoreTabService {
+    client: Client,
+    base_url: Url,
+}
+
+impl CoreTabService {
+    pub fn new(base_url: Url) -> Self {
+        Self {
+            client: Client::new(),
+            base_url,
+        }
+    }
+
+    fn url(&self, path: &str) -> Result<Url, TabError> {
+        self.base_url
+            .join(path)
+            .map_err(|err| TabError::Invalid(err.to_string()))
+    }
+
+    async fn post<Req, Resp>(&self, path: &str, payload: &Req) -> Result<Resp, TabError>
+    where
+        Req: Serialize + ?Sized,
+        Resp: for<'de> Deserialize<'de>,
+    {
+        let url = self.url(path)?;
+        let response = self
+            .client
+            .post(url)
+            .json(payload)
+            .send()
+            .await
+            .map_err(|err| TabError::Upstream {
+                status: StatusCode::BAD_GATEWAY,
+                message: err.to_string(),
+            })?;
+        Self::decode_response(response).await
+    }
+
+    async fn decode_response<T>(response: reqwest::Response) -> Result<T, TabError>
+    where
+        T: for<'de> Deserialize<'de>,
+    {
+        let status = response.status();
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|err| TabError::Upstream {
+                status,
+                message: err.to_string(),
+            })?;
+        if status.is_success() {
+            serde_json::from_slice(&bytes).map_err(|err| TabError::Upstream {
+                status,
+                message: err.to_string(),
+            })
+        } else {
+            let message = parse_error_message(&bytes);
+            Err(TabError::Upstream { status, message })
+        }
+    }
+}
+
+#[async_trait]
+impl TabService for CoreTabService {
+    async fn create_tab(
+        &self,
+        request: &CreateTabRequest,
+    ) -> Result<CreateTabResponse, TabError> {
+        let payload = CoreCreateTabRequest {
+            user_address: request.user_address.clone(),
+            recipient_address: request.recipient_address.clone(),
+            erc20_token: request.erc20_token.clone(),
+            ttl: request.ttl_seconds,
+        };
+
+        let result: CoreCreateTabResponse = self.post("core/payment-tabs", &payload).await?;
+        let tab_id = canonical_u256(&result.id);
+        let asset_address = request
+            .erc20_token
+            .clone()
+            .unwrap_or_else(|| ETH_SENTINEL_ADDRESS.to_string());
+        let start_timestamp = current_timestamp();
+        let ttl_seconds = request
+            .ttl_seconds
+            .map(|value| value as i64)
+            .unwrap_or_default();
+
+        Ok(CreateTabResponse {
+            tab_id,
+            user_address: request.user_address.clone(),
+            recipient_address: request.recipient_address.clone(),
+            asset_address,
+            start_timestamp,
+            ttl_seconds,
+        })
+    }
+}
+
+fn canonical_u256(value: &U256) -> String {
+    format!("{:#x}", value)
+}
+
+fn current_timestamp() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or_default()
+}
+
+#[async_trait]
 pub(crate) trait ExactService: Send + Sync {
     async fn verify(&self, request: &VerifyRequest) -> Result<VerifyResponse, ValidationError>;
     async fn settle(&self, request: &SettleRequest) -> Result<SettleResponse, ValidationError>;
@@ -365,6 +509,31 @@ pub struct PaymentRequirements {
     pub max_timeout_seconds: Option<u64>,
     pub asset: String,
     pub extra: Option<Value>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct CreateTabRequest {
+    #[serde(alias = "userAddress")]
+    pub user_address: String,
+    #[serde(alias = "recipientAddress")]
+    pub recipient_address: String,
+    #[serde(alias = "erc20Token")]
+    #[serde(default)]
+    pub erc20_token: Option<String>,
+    #[serde(alias = "ttlSeconds")]
+    #[serde(default)]
+    pub ttl_seconds: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateTabResponse {
+    pub tab_id: String,
+    pub user_address: String,
+    pub recipient_address: String,
+    pub asset_address: String,
+    pub start_timestamp: i64,
+    pub ttl_seconds: i64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -564,4 +733,27 @@ pub enum ValidationError {
     UnsupportedVersion(u8),
     #[error("exact flow error: {0}")]
     Exact(String),
+}
+
+#[derive(Debug, Error)]
+pub enum TabError {
+    #[error("4Mica tab provisioning is disabled")]
+    Unsupported,
+    #[error("{0}")]
+    Invalid(String),
+    #[error("{message}")]
+    Upstream { status: StatusCode, message: String },
+}
+
+#[derive(Debug, Serialize)]
+struct CoreCreateTabRequest {
+    user_address: String,
+    recipient_address: String,
+    erc20_token: Option<String>,
+    ttl: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CoreCreateTabResponse {
+    id: U256,
 }

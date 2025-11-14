@@ -23,6 +23,7 @@ import argparse
 import base64
 import json
 import os
+import secrets
 import sys
 import time
 from dataclasses import dataclass
@@ -358,6 +359,28 @@ class PaymentGuaranteeClaims:
         }
 
 
+@dataclass
+class TransferAuthorization:
+    """ERC-3009 authorization envelope used for debit (exact) payments."""
+
+    from_address: str
+    to_address: str
+    value: str
+    valid_after: int
+    valid_before: int
+    nonce: str
+
+    def to_json(self) -> JsonDict:
+        return {
+            "from": self.from_address,
+            "to": self.to_address,
+            "value": self.value,
+            "validAfter": self.valid_after,
+            "validBefore": self.valid_before,
+            "nonce": self.nonce,
+        }
+
+
 def build_payment_header(
     *,
     claims: PaymentGuaranteeClaims,
@@ -384,6 +407,29 @@ def build_payment_header(
     return base64.b64encode(encoded.encode("utf-8")).decode("utf-8")
 
 
+def build_exact_payment_header(
+    *,
+    authorization: TransferAuthorization,
+    signature: str,
+    scheme: str,
+    network: str,
+    version: int = 1,
+) -> str:
+    """Compose an X-PAYMENT header for standard x402 debit flows."""
+
+    envelope = {
+        "x402Version": version,
+        "scheme": scheme,
+        "network": network,
+        "payload": {
+            "authorization": authorization.to_json(),
+            "signature": signature,
+        },
+    }
+    encoded = json.dumps(envelope, separators=(",", ":"), sort_keys=False)
+    return base64.b64encode(encoded.encode("utf-8")).decode("utf-8")
+
+
 ETH_ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
 ETH_SENTINEL_ADDRESS = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 DEPOSIT_SELECTOR = "0xd0e30db0"
@@ -393,6 +439,85 @@ ERC20_ALLOWANCE_SELECTOR = "0xdd62ed3e"
 DEFAULT_GAS_LIMIT = 200_000
 ERC20_APPROVAL_GAS_LIMIT = 120_000
 ERC20_DEPOSIT_GAS_LIMIT = 260_000
+EVM_CHAIN_IDS: Dict[str, int] = {
+    "base": 8453,
+    "base-sepolia": 84_532,
+    "xdc": 50,
+    "avalanche-fuji": 43_113,
+    "avalanche": 43_114,
+    "polygon-amoy": 80_002,
+    "polygon": 137,
+    "sei": 1_329,
+    "sei-testnet": 1_328,
+}
+
+
+def resolve_chain_id(network: str) -> int:
+    lowered = network.strip().lower()
+    if lowered not in EVM_CHAIN_IDS:
+        raise ValueError(f"unsupported debit network {network!r}; configure EVM RPC/chain mapping")
+    return EVM_CHAIN_IDS[lowered]
+
+
+def sign_transfer_authorization(
+    *,
+    private_key: str,
+    token_name: str,
+    token_version: str,
+    chain_id: int,
+    verifying_contract: str,
+    from_address: str,
+    to_address: str,
+    value: int,
+    valid_after: int,
+    valid_before: int,
+    nonce_hex: str,
+) -> str:
+    try:
+        from eth_account import Account
+        from eth_account.messages import encode_typed_data
+    except ImportError as err:
+        raise RuntimeError(
+            "eth-account is required for debit flows. Install it via pip install eth-account."
+        ) from err
+
+    typed_data = {
+        "types": {
+            "EIP712Domain": [
+                {"name": "name", "type": "string"},
+                {"name": "version", "type": "string"},
+                {"name": "chainId", "type": "uint256"},
+                {"name": "verifyingContract", "type": "address"},
+            ],
+            "TransferWithAuthorization": [
+                {"name": "from", "type": "address"},
+                {"name": "to", "type": "address"},
+                {"name": "value", "type": "uint256"},
+                {"name": "validAfter", "type": "uint256"},
+                {"name": "validBefore", "type": "uint256"},
+                {"name": "nonce", "type": "bytes32"},
+            ],
+        },
+        "primaryType": "TransferWithAuthorization",
+        "domain": {
+            "name": token_name,
+            "version": token_version,
+            "chainId": chain_id,
+            "verifyingContract": verifying_contract,
+        },
+        "message": {
+            "from": from_address,
+            "to": to_address,
+            "value": value,
+            "validAfter": valid_after,
+            "validBefore": valid_before,
+            "nonce": nonce_hex,
+        },
+    }
+
+    signable = encode_typed_data(full_message=typed_data)
+    signed = Account.sign_message(signable, private_key=private_key)
+    return signed.signature.hex()
 
 
 def ensure_collateral_for_request(
@@ -889,35 +1014,291 @@ def run_settle(api: FacilitatorApi, args: argparse.Namespace) -> None:
     print_section("Facilitator /settle response", pretty_json(response))
 
 
-def run_discover(_: FacilitatorApi, args: argparse.Namespace) -> None:
-    client = ResourceServerClient(timeout=args.timeout)
+def _fetch_resource_requirements(
+    resource_url: str, method: str, timeout: float
+) -> Tuple[PaymentRequirements, JsonDict]:
+    client = ResourceServerClient(timeout=timeout)
     try:
-        print_step("Client", f"Calling paid API at {args.resource_url}")
-        requirements, raw_payload = client.fetch_requirements(args.resource_url, args.method)
-
-        print_section("Resource Server Response", pretty_json(raw_payload))
-        print_section(
-            "Extracted paymentRequirements",
-            pretty_json(requirements.to_payload()),
-        )
-
-        if "paymentHeader" in raw_payload:
-            print_section(
-                "Pre-signed paymentHeader from server",
-                raw_payload["paymentHeader"],
-            )
-        else:
-            print_step(
-                "Server",
-                "Resource expects the client to sign claims locally (no paymentHeader provided)",
-            )
-
-        print_step(
-            "Next",
-            "Use --claims/--signature or --payment-header with the verify/settle commands to continue.",
-        )
+        return client.fetch_requirements(resource_url, method)
     finally:
         client.close()
+
+
+def run_discover(_: FacilitatorApi, args: argparse.Namespace) -> None:
+    print_step("Client", f"Calling paid API at {args.resource_url}")
+    requirements, raw_payload = _fetch_resource_requirements(
+        args.resource_url, args.method, args.timeout
+    )
+
+    print_section("Resource Server Response", pretty_json(raw_payload))
+    print_section(
+        "Extracted paymentRequirements",
+        pretty_json(requirements.to_payload()),
+    )
+
+    if "paymentHeader" in raw_payload:
+        print_section(
+            "Pre-signed paymentHeader from server",
+            raw_payload["paymentHeader"],
+        )
+    else:
+        print_step(
+            "Server",
+            "Resource expects the client to sign claims locally (no paymentHeader provided)",
+        )
+
+    print_step(
+        "Next",
+        "Use --claims/--signature or --payment-header with the verify/settle commands to continue.",
+    )
+
+
+def _prepare_credit_payment(
+    *,
+    args: argparse.Namespace,
+    env_map: Dict[str, str],
+    signer: Any,
+    signer_address: str,
+    user_private_key: str,
+    timeout: float,
+    to_checksum_address: Any,
+) -> Tuple[PaymentRequirements, str, JsonDict]:
+    core_url = args.core_url or resolve_config_value(
+        ("FOUR_MICA_RPC_URL", "4MICA_RPC_URL"),
+        env_map,
+        required=False,
+        default="http://localhost:3000",
+    )
+    default_registration_asset = resolve_config_value(
+        "ASSET_ADDRESS",
+        env_map,
+        required=False,
+        default=ETH_SENTINEL_ADDRESS,
+    )
+    params = fetch_core_public_params(core_url, timeout=timeout)
+    contract_address_raw = params.get("contract_address")
+    if not isinstance(contract_address_raw, str):
+        raise ValueError("core public params missing contract_address")
+    contract_address = to_checksum_address(contract_address_raw)
+    ethereum_rpc_url = params.get("ethereum_http_rpc_url")
+    if not isinstance(ethereum_rpc_url, str):
+        raise ValueError("core public params missing ethereum_http_rpc_url")
+    chain_id_value = params.get("chain_id")
+    if isinstance(chain_id_value, str):
+        try:
+            chain_id_int = int(chain_id_value, 0)
+        except ValueError as err:
+            raise ValueError("core public params chain_id must be numeric") from err
+    elif isinstance(chain_id_value, int):
+        chain_id_int = chain_id_value
+    else:
+        raise ValueError("core public params missing numeric chain_id")
+
+    registration_asset_raw = args.registration_asset or default_registration_asset
+    registration_asset = to_checksum_address(registration_asset_raw)
+    registration_amount_int = parse_u256(args.registration_amount, field="registration_amount")
+    if registration_amount_int > 0:
+        print_step(
+            "Collateral",
+            f"Ensuring preregistration collateral {canonical_u256(registration_amount_int)} "
+            f"in asset {registration_asset} is available",
+        )
+        ensure_collateral_for_request(
+            core_url=core_url,
+            rpc_url=ethereum_rpc_url,
+            contract_address=contract_address,
+            chain_id=chain_id_int,
+            signer=signer,
+            asset_address=registration_asset,
+            required_amount=registration_amount_int,
+            timeout=timeout,
+        )
+    else:
+        print_step("Collateral", "Skipping preregistration collateral (registration amount is 0)")
+
+    print_step("Client", f"Calling paid API at {args.resource_url}")
+    requirements, discovery_payload = _fetch_resource_requirements(
+        args.resource_url, args.method, timeout
+    )
+
+    print_section("Resource Server Response", pretty_json(discovery_payload))
+    print_section("Extracted paymentRequirements", pretty_json(requirements.to_payload()))
+
+    if requirements.extra is None:
+        raise ValueError("paymentRequirements.extra is required for the auto flow")
+
+    extra = requirements.extra
+    tab_id_raw = _first_present(extra, "tabId", "tab_id")
+    user_from_requirements = _first_present(extra, "userAddress", "user_address")
+    start_ts_raw = _first_present(extra, "startTimestamp", "start_timestamp")
+
+    if tab_id_raw is None or user_from_requirements is None:
+        raise ValueError("paymentRequirements.extra must include tabId and userAddress")
+
+    requirement_user_address = to_checksum_address(str(user_from_requirements))
+    if requirement_user_address.lower() != signer_address.lower():
+        raise ValueError(
+            f"Requirement userAddress {requirement_user_address} "
+            f"does not match signer {signer_address}"
+        )
+
+    recipient_address = to_checksum_address(requirements.pay_to)
+    asset_address = to_checksum_address(requirements.asset)
+
+    tab_id_int = parse_u256(tab_id_raw, field="requirements.extra.tabId")
+
+    amount_source = args.amount or requirements.max_amount_required
+    amount_int = parse_u256(amount_source, field="amount")
+
+    if start_ts_raw is not None:
+        timestamp = parse_u256(start_ts_raw, field="requirements.extra.startTimestamp")
+    elif args.timestamp:
+        timestamp = args.timestamp
+    else:
+        timestamp = int(time.time())
+    if timestamp <= 0:
+        raise ValueError("timestamp must be a positive UNIX epoch value")
+
+    claims = PaymentGuaranteeClaims(
+        user_address=signer_address,
+        recipient_address=recipient_address,
+        tab_id=canonical_u256(tab_id_int),
+        amount=canonical_u256(amount_int),
+        asset_address=asset_address,
+        timestamp=timestamp,
+    )
+
+    print_section("Prepared Claims", pretty_json(claims.to_json()))
+
+    ensure_collateral_for_request(
+        core_url=core_url,
+        rpc_url=ethereum_rpc_url,
+        contract_address=contract_address,
+        chain_id=chain_id_int,
+        signer=signer,
+        asset_address=asset_address,
+        required_amount=amount_int,
+        timeout=timeout,
+    )
+
+    signature = sign_payment_claim(
+        params=params,
+        private_key=user_private_key,
+        scheme=args.signing_scheme,
+        user_address=signer_address,
+        recipient_address=recipient_address,
+        asset_address=asset_address,
+        tab_id=tab_id_int,
+        amount=amount_int,
+        timestamp=timestamp,
+    )
+
+    print_step("Client", f"Signed claims with scheme={args.signing_scheme}")
+    print_section("Signature", signature)
+
+    header = build_payment_header(
+        claims=claims,
+        signature=signature,
+        scheme=requirements.scheme,
+        network=requirements.network,
+        version=args.version,
+        signing_scheme=args.signing_scheme,
+    )
+
+    payload = {
+        "x402Version": args.version,
+        "paymentHeader": header,
+        "paymentRequirements": requirements.to_payload(),
+    }
+    return requirements, header, payload
+
+
+def _prepare_debit_payment(
+    *,
+    args: argparse.Namespace,
+    signer_address: str,
+    user_private_key: str,
+    timeout: float,
+    to_checksum_address: Any,
+) -> Tuple[PaymentRequirements, str, JsonDict]:
+    print_step("Client", f"Calling paid API at {args.resource_url}")
+    requirements, discovery_payload = _fetch_resource_requirements(
+        args.resource_url, args.method, timeout
+    )
+
+    print_section("Resource Server Response", pretty_json(discovery_payload))
+    print_section("Extracted paymentRequirements", pretty_json(requirements.to_payload()))
+
+    if requirements.scheme.lower() != "exact":
+        raise ValueError(
+            f"Debit flow expects scheme=exact, resource advertised {requirements.scheme!r}"
+        )
+
+    extra = requirements.extra or {}
+    token_name = _first_present(extra, "name")
+    token_version = _first_present(extra, "version")
+    if not token_name or not token_version:
+        raise ValueError(
+            "paymentRequirements.extra must include token metadata (name/version) for debit flows"
+        )
+
+    recipient_address = to_checksum_address(requirements.pay_to)
+    asset_address = to_checksum_address(requirements.asset)
+    amount_source = args.amount or requirements.max_amount_required
+    amount_int = parse_u256(amount_source, field="amount")
+    if amount_int <= 0:
+        raise ValueError("amount must be greater than zero for debit flows")
+
+    max_timeout = requirements.max_timeout_seconds or 300
+    if max_timeout <= 0:
+        max_timeout = 300
+    now = int(time.time())
+    valid_after = max(0, now - 600)
+    valid_before = now + max_timeout
+    nonce_hex = "0x" + secrets.token_bytes(32).hex()
+
+    authorization = TransferAuthorization(
+        from_address=signer_address,
+        to_address=recipient_address,
+        value=str(amount_int),
+        valid_after=valid_after,
+        valid_before=valid_before,
+        nonce=nonce_hex,
+    )
+
+    print_section("Transfer Authorization", pretty_json(authorization.to_json()))
+
+    chain_id = resolve_chain_id(requirements.network)
+    signature = sign_transfer_authorization(
+        private_key=user_private_key,
+        token_name=str(token_name),
+        token_version=str(token_version),
+        chain_id=chain_id,
+        verifying_contract=asset_address,
+        from_address=authorization.from_address,
+        to_address=authorization.to_address,
+        value=amount_int,
+        valid_after=authorization.valid_after,
+        valid_before=authorization.valid_before,
+        nonce_hex=authorization.nonce,
+    )
+    print_step("Client", "Signed TransferWithAuthorization payload for debit settlement")
+    print_section("Signature", signature)
+
+    header = build_exact_payment_header(
+        authorization=authorization,
+        signature=signature,
+        scheme=requirements.scheme,
+        network=requirements.network,
+        version=args.version,
+    )
+
+    payload = {
+        "x402Version": args.version,
+        "paymentHeader": header,
+        "paymentRequirements": requirements.to_payload(),
+    }
+    return requirements, header, payload
 
 
 def run_auto(api: FacilitatorApi, args: argparse.Namespace) -> None:
@@ -935,143 +1316,37 @@ def run_auto(api: FacilitatorApi, args: argparse.Namespace) -> None:
 
         env_path = Path(args.env_file).expanduser()
         env_map = load_env_map(env_path)
-
-        core_url = args.core_url or resolve_config_value(
-            ("FOUR_MICA_RPC_URL", "4MICA_RPC_URL"),
-            env_map,
-            required=False,
-            default="http://localhost:3000",
-        )
         user_private_key = resolve_config_value("USER_PRIVATE_KEY", env_map)
         configured_user_address = resolve_config_value("USER_ADDRESS", env_map)
         signer = Account.from_key(user_private_key)
-        signer_address = signer.address
+        signer_address = to_checksum_address(signer.address)
         expected_user_address = to_checksum_address(configured_user_address)
         if signer_address.lower() != expected_user_address.lower():
             raise ValueError(
                 "USER_PRIVATE_KEY does not match USER_ADDRESS. Update examples/.env with matching values."
             )
 
-        client = ResourceServerClient(timeout=args.timeout)
-        try:
-            print_step("Client", f"Calling paid API at {args.resource_url}")
-            requirements, discovery_payload = client.fetch_requirements(
-                args.resource_url, args.method
+        payment_method = (args.payment_method or "credit").lower()
+        if payment_method == "credit":
+            requirements, header, payload = _prepare_credit_payment(
+                args=args,
+                env_map=env_map,
+                signer=signer,
+                signer_address=signer_address,
+                user_private_key=user_private_key,
+                timeout=args.timeout,
+                to_checksum_address=to_checksum_address,
             )
-        finally:
-            client.close()
-
-        print_section("Resource Server Response", pretty_json(discovery_payload))
-        print_section("Extracted paymentRequirements", pretty_json(requirements.to_payload()))
-
-        if requirements.extra is None:
-            raise ValueError("paymentRequirements.extra is required for the auto flow")
-
-        extra = requirements.extra
-        tab_id_raw = _first_present(extra, "tabId", "tab_id")
-        user_from_requirements = _first_present(extra, "userAddress", "user_address")
-        start_ts_raw = _first_present(extra, "startTimestamp", "start_timestamp")
-
-        if tab_id_raw is None or user_from_requirements is None:
-            raise ValueError("paymentRequirements.extra must include tabId and userAddress")
-
-        requirement_user_address = to_checksum_address(str(user_from_requirements))
-        if requirement_user_address.lower() != signer_address.lower():
-            raise ValueError(
-                f"Requirement userAddress {requirement_user_address} does not match signer {signer_address}"
+        elif payment_method == "debit":
+            requirements, header, payload = _prepare_debit_payment(
+                args=args,
+                signer_address=signer_address,
+                user_private_key=user_private_key,
+                timeout=args.timeout,
+                to_checksum_address=to_checksum_address,
             )
-
-        recipient_address = to_checksum_address(requirements.pay_to)
-        asset_address = to_checksum_address(requirements.asset)
-
-        tab_id_int = parse_u256(tab_id_raw, field="requirements.extra.tabId")
-
-        if args.amount:
-            amount_source = args.amount
         else:
-            amount_source = requirements.max_amount_required
-        amount_int = parse_u256(amount_source, field="amount")
-
-        if start_ts_raw is not None:
-            timestamp = parse_u256(
-                start_ts_raw, field="requirements.extra.startTimestamp"
-            )
-        elif args.timestamp:
-            timestamp = args.timestamp
-        else:
-            timestamp = int(time.time())
-        if timestamp <= 0:
-            raise ValueError("timestamp must be a positive UNIX epoch value")
-
-        claims = PaymentGuaranteeClaims(
-            user_address=signer_address,
-            recipient_address=recipient_address,
-            tab_id=canonical_u256(tab_id_int),
-            amount=canonical_u256(amount_int),
-            asset_address=asset_address,
-            timestamp=timestamp,
-        )
-
-        print_section("Prepared Claims", pretty_json(claims.to_json()))
-
-        params = fetch_core_public_params(core_url, timeout=args.timeout)
-        contract_address = params.get("contract_address")
-        if not isinstance(contract_address, str):
-            raise ValueError("core public params missing contract_address")
-        ethereum_rpc_url = params.get("ethereum_http_rpc_url")
-        if not isinstance(ethereum_rpc_url, str):
-            raise ValueError("core public params missing ethereum_http_rpc_url")
-        chain_id_value = params.get("chain_id")
-        if isinstance(chain_id_value, str):
-            try:
-                chain_id_int = int(chain_id_value, 0)
-            except ValueError as err:
-                raise ValueError("core public params chain_id must be numeric") from err
-        elif isinstance(chain_id_value, int):
-            chain_id_int = chain_id_value
-        else:
-            raise ValueError("core public params missing numeric chain_id")
-
-        ensure_collateral_for_request(
-            core_url=core_url,
-            rpc_url=ethereum_rpc_url,
-            contract_address=to_checksum_address(contract_address),
-            chain_id=chain_id_int,
-            signer=signer,
-            asset_address=asset_address,
-            required_amount=amount_int,
-            timeout=args.timeout,
-        )
-
-        signature = sign_payment_claim(
-            params=params,
-            private_key=user_private_key,
-            scheme=args.signing_scheme,
-            user_address=signer_address,
-            recipient_address=recipient_address,
-            asset_address=asset_address,
-            tab_id=tab_id_int,
-            amount=amount_int,
-            timestamp=timestamp,
-        )
-
-        print_step("Client", f"Signed claims with scheme={args.signing_scheme}")
-        print_section("Signature", signature)
-
-        header = build_payment_header(
-            claims=claims,
-            signature=signature,
-            scheme=requirements.scheme,
-            network=requirements.network,
-            version=args.version,
-            signing_scheme=args.signing_scheme,
-        )
-
-        payload = {
-            "x402Version": args.version,
-            "paymentHeader": header,
-            "paymentRequirements": requirements.to_payload(),
-        }
+            raise ValueError(f"unsupported payment method {payment_method!r}")
 
         print_section("X-PAYMENT Header (base64)", header)
         print_section("Facilitator Request Payload", pretty_json(payload))
@@ -1255,6 +1530,21 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=1,
         help="x402Version to send (default: %(default)s).",
+    )
+    auto_parser.add_argument(
+        "--payment-method",
+        choices=["credit", "debit"],
+        default="credit",
+        help="Select credit (4Mica guarantee) or debit (exact on-chain) settlement path (default: %(default)s).",
+    )
+    auto_parser.add_argument(
+        "--registration-amount",
+        default="0x1",
+        help="Collateral amount (hex or decimal) to provision before contacting the resource (default: %(default)s). Set to 0 to skip.",
+    )
+    auto_parser.add_argument(
+        "--registration-asset",
+        help="Asset address used for preregistration collateral (default: ASSET_ADDRESS or ETH sentinel).",
     )
     auto_parser.set_defaults(handler=run_auto)
 

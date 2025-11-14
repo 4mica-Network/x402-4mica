@@ -12,7 +12,7 @@ use anyhow::Context;
 use crate::config::{ServiceConfig, load_public_params};
 use crate::exact::X402ExactService;
 use crate::issuer::{GuaranteeIssuer, LiveGuaranteeIssuer};
-use crate::server::state::{AppState, ExactService, FourMicaHandler};
+use crate::server::state::{AppState, CoreTabService, ExactService, FourMicaHandler, TabService};
 use crate::verifier::{CertificateValidator, CertificateVerifier};
 
 #[tokio::main]
@@ -28,14 +28,17 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("failed to load 4Mica public parameters")?;
 
+    let api_base_url = public_params.api_base_url.clone();
     let verifier = Arc::new(CertificateVerifier::new(
         public_params.operator_public_key,
         public_params.guarantee_domain,
     ));
     let issuer = Arc::new(
-        LiveGuaranteeIssuer::try_new(public_params.api_base_url.clone())
+        LiveGuaranteeIssuer::try_new(api_base_url.clone())
             .context("failed to initialize 4Mica guarantee issuer")?,
     );
+    let tab_service: Option<Arc<dyn TabService>> =
+        Some(Arc::new(CoreTabService::new(api_base_url.clone())) as Arc<dyn TabService>);
     let four_mica_handler = FourMicaHandler::new(
         service_cfg.scheme.clone(),
         service_cfg.network.clone(),
@@ -53,7 +56,7 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    let state = AppState::new(Some(four_mica_handler), exact_service);
+    let state = AppState::new(Some(four_mica_handler), tab_service, exact_service);
 
     server::run(service_cfg, state).await
 }

@@ -21,8 +21,9 @@ use crate::verifier::CertificateValidator;
 use super::{
     handlers::build_router,
     state::{
-        AppState, ExactService, FourMicaHandler, PaymentRequirements, SettleRequest,
-        SettleResponse, SharedState, ValidationError, VerifyRequest, VerifyResponse,
+        AppState, CreateTabRequest, CreateTabResponse, ExactService, FourMicaHandler,
+        PaymentRequirements, SettleRequest, SettleResponse, SharedState, TabError, TabService,
+        ValidationError, VerifyRequest, VerifyResponse,
     },
 };
 
@@ -156,7 +157,11 @@ async fn supported_includes_exact_when_available() {
         issuer as Arc<dyn GuaranteeIssuer>,
     );
     let exact = Arc::new(MockExact::new());
-    let state = AppState::new(Some(handler), Some(exact.clone() as Arc<dyn ExactService>));
+    let state = AppState::new(
+        Some(handler),
+        None,
+        Some(exact.clone() as Arc<dyn ExactService>),
+    );
     let router = build_router(Arc::new(state));
 
     let response = router
@@ -202,6 +207,103 @@ async fn health_endpoint_returns_ok() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let payload: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["status"], "ok");
+}
+
+#[tokio::test]
+async fn tabs_endpoint_returns_response_from_service() {
+    let tab_response = CreateTabResponse {
+        tab_id: "0x1".into(),
+        user_address: "0xabc".into(),
+        recipient_address: "0xdef".into(),
+        asset_address: "0xeee".into(),
+        start_timestamp: 123,
+        ttl_seconds: 60,
+    };
+    let service = Arc::new(MockTabService::success(tab_response.clone()));
+    let state = Arc::new(AppState::new(
+        None,
+        Some(service as Arc<dyn TabService>),
+        None,
+    ));
+    let router = build_router(state);
+
+    let request = CreateTabRequest {
+        user_address: "0xabc".into(),
+        recipient_address: "0xdef".into(),
+        erc20_token: None,
+        ttl_seconds: Some(60),
+    };
+
+    let response = router
+        .oneshot(post_json("/tabs", &request))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: CreateTabResponse = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload.tab_id, "0x1");
+    assert_eq!(payload.start_timestamp, 123);
+}
+
+#[tokio::test]
+async fn tabs_endpoint_returns_not_implemented_when_disabled() {
+    let state = Arc::new(AppState::new(None, None, None));
+    let router = build_router(state);
+
+    let request = CreateTabRequest {
+        user_address: "0xabc".into(),
+        recipient_address: "0xdef".into(),
+        erc20_token: None,
+        ttl_seconds: None,
+    };
+
+    let response = router
+        .oneshot(post_json("/tabs", &request))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    assert!(payload["error"]
+        .as_str()
+        .unwrap()
+        .contains("tab provisioning"));
+}
+
+#[tokio::test]
+async fn tabs_endpoint_propagates_upstream_errors() {
+    let service = Arc::new(MockTabService::failing(TabError::Upstream {
+        status: StatusCode::BAD_REQUEST,
+        message: "user not registered".into(),
+    }));
+    let state = Arc::new(AppState::new(
+        None,
+        Some(service as Arc<dyn TabService>),
+        None,
+    ));
+    let router = build_router(state);
+
+    let request = CreateTabRequest {
+        user_address: "0xabc".into(),
+        recipient_address: "0xdef".into(),
+        erc20_token: None,
+        ttl_seconds: Some(60),
+    };
+
+    let response = router
+        .oneshot(post_json("/tabs", &request))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    assert!(payload["error"]
+        .as_str()
+        .unwrap()
+        .contains("user not registered"));
 }
 
 #[tokio::test]
@@ -326,11 +428,12 @@ fn test_state(verifier: Arc<MockVerifier>, issuer: Arc<MockIssuer>) -> SharedSta
         verifier.clone() as Arc<dyn CertificateValidator>,
         issuer.clone() as Arc<dyn GuaranteeIssuer>,
     );
-    Arc::new(AppState::new(Some(handler), None))
+    Arc::new(AppState::new(Some(handler), None, None))
 }
 
 fn exact_state(exact: Arc<MockExact>) -> SharedState {
-    Arc::new(AppState::new(None, Some(exact)))
+    let exact_service: Arc<dyn ExactService> = exact;
+    Arc::new(AppState::new(None, None, Some(exact_service)))
 }
 
 fn sample_requirements() -> PaymentRequirements {
@@ -454,6 +557,55 @@ impl ExactService for MockExact {
 
     async fn supported(&self) -> Result<Vec<(String, String)>, ValidationError> {
         Ok(vec![("exact".into(), "base".into())])
+    }
+}
+
+struct MockTabService {
+    result: Result<CreateTabResponse, TabError>,
+    calls: AtomicUsize,
+}
+
+impl MockTabService {
+    fn success(response: CreateTabResponse) -> Self {
+        Self {
+            result: Ok(response),
+            calls: AtomicUsize::new(0),
+        }
+    }
+
+    #[allow(dead_code)]
+    fn failing(error: TabError) -> Self {
+        Self {
+            result: Err(error),
+            calls: AtomicUsize::new(0),
+        }
+    }
+
+    #[allow(dead_code)]
+    fn calls(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
+}
+
+#[async_trait]
+impl TabService for MockTabService {
+    async fn create_tab(&self, _: &CreateTabRequest) -> Result<CreateTabResponse, TabError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        match &self.result {
+            Ok(response) => Ok(response.clone()),
+            Err(err) => Err(clone_tab_error(err)),
+        }
+    }
+}
+
+fn clone_tab_error(err: &TabError) -> TabError {
+    match err {
+        TabError::Unsupported => TabError::Unsupported,
+        TabError::Invalid(message) => TabError::Invalid(message.clone()),
+        TabError::Upstream { status, message } => TabError::Upstream {
+            status: *status,
+            message: message.clone(),
+        },
     }
 }
 

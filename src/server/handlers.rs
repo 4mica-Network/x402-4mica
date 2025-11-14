@@ -1,15 +1,17 @@
 use axum::{
     Json, Router,
     extract::State,
+    http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
 };
+use serde::Serialize;
 use tower_http::trace::TraceLayer;
 use tracing::{info, warn};
 
 use super::state::{
-    HealthResponse, SettleRequest, SettleResponse, SharedState, SupportedResponse, VerifyRequest,
-    VerifyResponse,
+    CreateTabRequest, HealthResponse, SettleRequest, SettleResponse, SharedState, SupportedResponse,
+    TabError, VerifyRequest, VerifyResponse,
 };
 
 pub(super) fn build_router(state: SharedState) -> Router {
@@ -17,6 +19,7 @@ pub(super) fn build_router(state: SharedState) -> Router {
         .route("/supported", get(supported_handler))
         .route("/verify", post(verify_handler))
         .route("/settle", post(settle_handler))
+        .route("/tabs", post(create_tab_handler))
         .route("/health", get(health_handler))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
@@ -82,4 +85,29 @@ async fn settle_handler(
             Json(SettleResponse::invalid(err.to_string(), state.network()))
         }
     }
+}
+
+async fn create_tab_handler(
+    State(state): State<SharedState>,
+    Json(request): Json<CreateTabRequest>,
+) -> impl IntoResponse {
+    match state.create_tab(&request).await {
+        Ok(response) => Json(response).into_response(),
+        Err(err) => {
+            let status = match &err {
+                TabError::Unsupported => StatusCode::NOT_IMPLEMENTED,
+                TabError::Invalid(_) => StatusCode::BAD_REQUEST,
+                TabError::Upstream { status, .. } => *status,
+            };
+            let body = ErrorResponse {
+                error: err.to_string(),
+            };
+            (status, Json(body)).into_response()
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct ErrorResponse {
+    error: String,
 }

@@ -40,12 +40,11 @@ DEFAULT_MAX_AMOUNT = "0x2386f26fc10000"  # 0.01 ETH
 DEFAULT_ASSET = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 DEFAULT_DESCRIPTION = "Demo paid API – 4Mica tab verification required"
 DEFAULT_RESOURCE = "mock-paid-endpoint"
-DEFAULT_CORE_URL = "http://localhost:3000"
 DEFAULT_FACILITATOR_URL = "http://localhost:8080"
 
 _ENV_FILE_CACHE: Optional[Dict[str, str]] = None
 _REQUIREMENTS_CACHE: Optional[JsonDict] = None
-_TAB_STATE: Dict[str, Any] = {"tab_id": None, "start_timestamp": None}
+_TAB_STATE: Dict[str, Any] = {"tab_id": None, "start_timestamp": None, "asset_address": None}
 
 
 def _load_env_file() -> Dict[str, str]:
@@ -138,40 +137,69 @@ def _ensure_payment_tab(
     ttl_seconds: Optional[int],
     erc20_token: Optional[str],
 ) -> str:
-    base_url = _config_value(
-        ("FOUR_MICA_RPC_URL", "4MICA_RPC_URL"),
-        required=False,
-        default=DEFAULT_CORE_URL,
-    )
     existing = _TAB_STATE.get("tab_id")
     if existing is None:
-        url = f"{base_url.rstrip('/')}/core/payment-tabs"
+        facilitator_url = _config_value(
+            "FACILITATOR_URL",
+            required=False,
+            default=DEFAULT_FACILITATOR_URL,
+        )
+        url = f"{facilitator_url.rstrip('/')}/tabs"
         payload = {
+            # Facilitator accepts camelCase aliases, but mixing both styles
+            # results in duplicate-field errors from serde. Stick to snake_case.
             "user_address": user_address,
             "recipient_address": recipient_address,
             "erc20_token": erc20_token,
-            "ttl": ttl_seconds,
+            "ttl_seconds": ttl_seconds,
         }
 
         try:
             response = requests.post(url, json=payload, timeout=10)
             response.raise_for_status()
+        except requests.HTTPError as err:
+            message = _extract_error_from_response(err.response)
+            raise RuntimeError(
+                f"Facilitator rejected payment tab ({err.response.status_code}): {message}"
+            ) from err
         except requests.RequestException as err:
-            raise RuntimeError(f"Failed to create payment tab via {url}: {err}") from err
+            raise RuntimeError(
+                f"Failed to request payment tab via facilitator at {url}: {err}"
+            ) from err
 
         data = response.json()
-        tab_id = data.get("id")
+        tab_id = data.get("tabId")
         if tab_id is None:
-            raise RuntimeError("4Mica response missing tab id.")
-        tab_id_hex = _as_hex_u256(tab_id)
-        _TAB_STATE["tab_id"] = tab_id_hex
+            raise RuntimeError("Facilitator response missing tabId.")
+        _TAB_STATE["tab_id"] = str(tab_id)
+        start_ts_value = data.get("startTimestamp")
+        if start_ts_value is not None:
+            try:
+                _TAB_STATE["start_timestamp"] = int(start_ts_value)
+            except (TypeError, ValueError) as err:
+                raise RuntimeError("Facilitator response included invalid startTimestamp") from err
+        if data.get("assetAddress"):
+            _TAB_STATE["asset_address"] = str(data["assetAddress"])
     else:
-        tab_id_hex = existing
+        tab_id = existing
 
     if _TAB_STATE.get("start_timestamp") is None:
         _TAB_STATE["start_timestamp"] = int(time.time())
 
-    return tab_id_hex
+    return tab_id
+
+
+def _extract_error_from_response(response: Optional[requests.Response]) -> str:
+    if response is None:
+        return "unknown error"
+    try:
+        payload = response.json()
+    except ValueError:
+        text = response.text.strip()
+        return text or "unknown error"
+    if isinstance(payload, dict) and "error" in payload:
+        return str(payload["error"])
+    return response.text.strip() or "unknown error"
 
 
 def _build_payment_requirements() -> JsonDict:
@@ -186,10 +214,15 @@ def _build_payment_requirements() -> JsonDict:
         _config_value("RECIPIENT_ADDRESS"),
         field="RECIPIENT_ADDRESS",
     )
-    asset_address = _normalize_address(
+    configured_asset = _normalize_address(
         _config_value("ASSET_ADDRESS", required=False, default=DEFAULT_ASSET),
         field="ASSET_ADDRESS",
     )
+    tab_asset = _TAB_STATE.get("asset_address")
+    if tab_asset:
+        asset_address = _normalize_address(tab_asset, field="assetAddress")
+    else:
+        asset_address = configured_asset
 
     max_amount_required = _as_hex_u256(
         _config_value("MAX_AMOUNT_WEI", required=False, default=DEFAULT_MAX_AMOUNT)
