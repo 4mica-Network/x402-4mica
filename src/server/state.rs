@@ -317,9 +317,9 @@ impl FourMicaHandler {
                 "claim amount is zero".into(),
             ));
         }
-        if claims.amount > amount_required {
+        if claims.amount != amount_required {
             return Err(ValidationError::Mismatch(format!(
-                "claim amount {} exceeds maxAmountRequired {}",
+                "claim amount {} does not match maxAmountRequired {}",
                 claims.amount, amount_required
             )));
         }

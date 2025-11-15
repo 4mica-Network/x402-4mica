@@ -335,6 +335,37 @@ async fn verify_rejects_invalid_version() {
 }
 
 #[tokio::test]
+async fn verify_rejects_mismatched_amount() {
+    let verifier = Arc::new(MockVerifier::success());
+    let issuer = Arc::new(MockIssuer::success());
+    let state = test_state(verifier.clone(), issuer.clone());
+    let router = build_router(state);
+
+    let mut requirements = sample_requirements();
+    requirements.max_amount_required = "11".into();
+
+    let request_body = VerifyRequest {
+        x402_version: 1,
+        payment_header: encoded_header(),
+        payment_requirements: requirements,
+    };
+
+    let response = router
+        .oneshot(post_json("/verify", &request_body))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: VerifyResponse = serde_json::from_slice(&body).unwrap();
+    assert!(!payload.is_valid);
+    let reason = payload.invalid_reason.expect("reason");
+    assert!(reason.contains("claim amount"));
+    assert_eq!(verifier.verify_calls(), 0);
+    assert_eq!(issuer.issue_calls(), 0);
+}
+
+#[tokio::test]
 async fn settle_propagates_issue_errors() {
     let verifier = Arc::new(MockVerifier::success());
     let issuer = Arc::new(MockIssuer::failing());
@@ -440,7 +471,7 @@ fn sample_requirements() -> PaymentRequirements {
     PaymentRequirements {
         scheme: "4mica-guarantee".into(),
         network: "4mica-mainnet".into(),
-        max_amount_required: "1000".into(),
+        max_amount_required: "10".into(),
         resource: None,
         description: None,
         mime_type: None,
