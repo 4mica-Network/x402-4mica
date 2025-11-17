@@ -208,6 +208,126 @@ to see the mock `paymentRequirements` payload.
 Run `python examples/x402_facilitator_client.py --help` inside a virtualenv with
 `pip install -r examples/requirements.txt` for full usage details.
 
+## Migrate from x402
+
+The facilitator can transparently replace the EIP-3009/x402 debit flow. The key is to swap the old
+`exact` scheme for the 4Mica credit primitives described below.
+
+### Changes resource servers must make
+
+1. **Point at the credit facilitator** – set `X402_FACILITATOR_URL=https://x402.4mica.xyz`
+   (or the TypeScript `CC_FACILITATOR_URL`). This host validates guarantee envelopes and returns BLS
+   certificates instead of ERC-3009 receipts.
+2. **Provision tabs before issuing requirements** – whenever a user shares their wallet, call
+   `POST https://x402.4mica.xyz/tabs` with `{ userAddress, recipientAddress, erc20Token?, ttlSeconds? }`.
+   Cache `{ tabId, assetAddress, startTimestamp, ttlSeconds }` and reuse that tab per
+   `(user, recipient, asset)` pair.
+3. **Emit credit-flavoured `paymentRequirements`** – embed the latest tab metadata and switch the
+   identifying strings:
+
+   ```jsonc
+   {
+     "scheme": "4mica-guarantee",
+     "network": "4mica-mainnet",
+     "maxAmountRequired": "<decimal or 0x amount>",
+     "resource": "/your/resource",
+     "description": "Describe the protected work",
+     "mimeType": "application/json",
+     "payTo": "<recipientAddress>",
+     "maxTimeoutSeconds": 300,
+     "asset": "<assetAddress>",
+     "extra": {
+       "tabId": "<tabId>",
+       "userAddress": "<user wallet>",
+       "...other metadata you already add..."
+     }
+   }
+   ```
+
+   The facilitator enforces that `scheme`, `network`, `payTo`, `asset`, `tabId`, and `userAddress`
+   match the tab exactly, so keep them synchronized.
+4. **Expect credit certificates during settlement** – `/verify` still performs structural checks and
+   `/settle` now returns `{ success, networkId: "4mica-mainnet", certificate: { claims, signature } }`.
+   Persist the certificate if you need to downstream claim remuneration via 4Mica core.
+
+### Changes clients (payers) must make
+
+Payers sign guarantees instead of EIP-3009 transfers. Use the official SDK located at
+`~/4mica-core/sdk` (crate name `rust-sdk-4mica`) to manage collateral and produce signatures.
+
+1. **Install the SDK** – inside your agent crate run
+
+   ```bash
+   cargo add rust-sdk-4mica --path ~/4mica-core/sdk
+   ```
+
+   or add the same entry manually to `Cargo.toml`.
+2. **Configure the client** – create a `Client` with the payer’s signing key. The SDK pulls the
+   remaining parameters (domain separator, operator key, etc.) from `FOUR_MICA_RPC_URL`.
+
+   ```rust
+   use rust_sdk_4mica::{Client, ConfigBuilder};
+
+   let config = ConfigBuilder::default()
+       .rpc_url("https://api.4mica.xyz/".into())
+       .wallet_private_key(std::env::var("PAYER_KEY")?)
+       .build()?;
+   let client = Client::new(config).await?;
+   ```
+
+3. **Fund the tab** – before requesting credit, ensure the payer has collateral using
+   `client.user.deposit(...)` (or `approve_erc20` + `deposit` for tokens). Refer to the SDK README
+   for concrete examples.
+4. **Sign guarantee claims** – derive `PaymentGuaranteeClaims` from the recipient’s
+   `paymentRequirements` (copy `tabId`, `userAddress`, `payTo`, `asset`, and the desired `amount`),
+   choose a signing scheme (usually `SigningScheme::Eip712`), and call `client.user.sign_payment`.
+
+   ```rust
+   use rust_sdk_4mica::{PaymentGuaranteeClaims, SigningScheme, U256};
+
+   let claims = PaymentGuaranteeClaims {
+       user_address: payer_wallet.clone(),
+       recipient_address: pay_to.clone(),
+       tab_id: tab_id_u256,
+       amount: U256::from(amount_wei),
+       asset_address: asset.clone(),
+       timestamp: chrono::Utc::now().timestamp() as u64,
+       req_id: U256::from(rand::random::<u64>()),
+   };
+   let signature = client
+       .user
+       .sign_payment(claims.clone(), SigningScheme::Eip712)
+       .await?;
+   ```
+
+5. **Build the `X-PAYMENT` header** – wrap `{ x402Version: 1, scheme: "4mica-guarantee", network:
+   "4mica-mainnet", payload: { claims, signature, signingScheme: "eip712" } }` into base64 (see
+   `examples/x402_facilitator_client.py::compose_payment_header`) and send it alongside the retrying
+   HTTP request.
+6. **Settle your tabs** – every tab response includes `ttlSeconds`, which is the settlement window in
+   seconds from `startTimestamp`. Recipients should call `/settle` (and issue the guarantee) before
+   that TTL lapses; once a certificate comes back they must relay the `tabId`, `reqId`, `amount`, and
+   `asset` to the payer. Payers are expected to clear the balance within the same TTL window to avoid
+   the recipient redeeming their collateral. Use the SDK’s `UserClient::pay_tab` helper to repay the
+   outstanding credit with the exact asset used when the tab was opened:
+
+   ```rust
+   use rust_sdk_4mica::U256;
+
+   let receipt = client
+       .user
+       .pay_tab(tab_id, req_id, U256::from(amount_wei), recipient_address.clone(), erc20_token)
+       .await?;
+   ```
+
+   After broadcasting the repayment transaction, poll `client.user.get_tab_payment_status(tab_id)`
+   (or `client.user.get_user()`) to verify that `paid` equals the guaranteed amount. If the TTL
+   expires without repayment the recipient is free to run `recipient.remunerate(cert)` from the SDK,
+   which slashes your posted collateral on-chain.
+
+Following these steps lets existing x402 deployments keep their HTTP surface area while relying on
+4Mica’s credit guarantees under the hood.
+
 ## Testing
 
 ```bash
