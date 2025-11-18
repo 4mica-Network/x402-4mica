@@ -40,7 +40,7 @@ DEFAULT_SCHEME = "4mica-credit"
 DEFAULT_NETWORK = "sepolia-mainnet"
 DEFAULT_MAX_AMOUNT = "0x2386f26fc10000"  # 0.01 ETH
 DEFAULT_ASSET = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
-DEFAULT_DESCRIPTION = "Demo paid API – 4Mica tab verification required"
+DEFAULT_DESCRIPTION = "Demo paid API – 4mica tab verification required"
 DEFAULT_RESOURCE = "mock-paid-endpoint"
 DEFAULT_FACILITATOR_URL = "http://localhost:8080"
 

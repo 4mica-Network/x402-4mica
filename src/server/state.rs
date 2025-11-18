@@ -204,7 +204,7 @@ impl FourMicaHandler {
             tab_id = format!("{:#x}", claims.tab_id),
             req_id = format!("{:#x}", claims.req_id),
             amount = format!("{:#x}", claims.amount),
-            "4Mica guarantee issued during settlement"
+            "4mica guarantee issued during settlement"
         );
 
         Ok(SettleResponse::four_mica_success(
@@ -734,7 +734,7 @@ pub enum ValidationError {
 
 #[derive(Debug, Error)]
 pub enum TabError {
-    #[error("4Mica tab provisioning is disabled")]
+    #[error("4mica tab provisioning is disabled")]
     Unsupported,
     #[error("{0}")]
     Invalid(String),

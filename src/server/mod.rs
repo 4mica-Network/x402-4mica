@@ -22,7 +22,7 @@ pub async fn run(cfg: ServiceConfig, state: AppState) -> anyhow::Result<()> {
         .context("failed to bind listener")?;
 
     let addr = listener.local_addr()?;
-    info!(%addr, "x402-4Mica facilitator started");
+    info!(%addr, "x402-4mica facilitator started");
 
     axum::serve(listener, router)
         .with_graceful_shutdown(shutdown_signal())

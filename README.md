@@ -1,23 +1,23 @@
-# x402-4Mica Facilitator
+# x402-4mica Facilitator
 
-An Axum-based facilitator that speaks the x402 protocol while orchestrating 4Mica credit
+An Axum-based facilitator that speaks the x402 protocol while orchestrating 4mica credit
 guarantees. The service is **stateless**: it never stores recipient wallets or pushes on-chain
 transactions. It accepts signed guarantee claims from clients, checks them against the resource
-server’s `paymentRequirements`, and, on settlement, asks the 4Mica core service to mint and verify a
+server’s `paymentRequirements`, and, on settlement, asks the 4mica core service to mint and verify a
 BLS certificate before returning it to the recipient.
 
 ## How the facilitator moves data
 
 - **Startup** – the process loads configuration from the environment, then calls
-  `FOUR_MICA_RPC_URL/core/public-params` (or the `4MICA_RPC_URL` alias) to fetch the operator’s BLS
-  public key, domain separator, and API base URL. Those values are kept in memory and reused for all
-  later requests.
+  `X402_CORE_API_URL/core/public-params` (or the first `coreApiUrl` listed inside `X402_NETWORKS`) to
+  fetch the operator’s BLS public key, domain separator, and API base URL. Those values are kept in
+  memory and reused for all later requests.
 - **Tab provisioning (`POST /tabs`)** – recipients can ask the facilitator to open a payment tab on
-  their behalf. The facilitator relays the request to `core/payment-tabs`, converts the 4Mica
+  their behalf. The facilitator relays the request to `core/payment-tabs`, converts the 4mica
   response into a plain JSON payload, and hands the tab metadata back to the resource server.
 - **Verification (`POST /verify`)** – recipients send the base64 `X-PAYMENT` header plus the
   `paymentRequirements` they issued to the client. The facilitator decodes the header, validates the
-  claims against the requirements, and mirrors the upstream x402 error semantics. No 4Mica network
+  claims against the requirements, and mirrors the upstream x402 error semantics. No 4mica network
   call is made in this path.
 - **Settlement (`POST /settle`)** – recipients replay the same payload once they are ready to accept
   credit. The facilitator re-runs validation, submits the signed guarantee to
@@ -30,7 +30,7 @@ facilitator from `x402-rs`, exposing those `(scheme, network)` pairs on `/suppor
 ## End-to-end credit flow
 
 The sequence below highlights each HTTP request, who sends it, and how data travels through
-x402-4Mica and the 4Mica core service.
+x402-4mica and the 4mica core service.
 
 1. **Client discovers the paywall**
    - Client → Recipient resource: request protected content.
@@ -42,7 +42,7 @@ x402-4Mica and the 4Mica core service.
      `{ userAddress, erc20Token?, ttlSeconds? }`.
    - Recipient → Facilitator: `POST /tabs` using the supplied body. The facilitator will reuse the
      existing tab for that `(user, recipient, asset)` pair or create a fresh one.
-   - Facilitator → 4Mica core: `POST core/payment-tabs` whenever a new tab is required.
+   - Facilitator → 4mica core: `POST core/payment-tabs` whenever a new tab is required.
    - Facilitator → Recipient: `{ tabId, userAddress, recipientAddress, assetAddress, startTimestamp, ttlSeconds }`.
      The recipient stores this tab metadata for the user.
    - Recipient → Client: `paymentRequirements` that include the newly issued `tabId` and the wallet
@@ -60,7 +60,7 @@ x402-4Mica and the 4Mica core service.
      the claims reference the advertised tab, user, asset, `payTo`, and that `amount` exactly equals
      `maxAmountRequired`.
    - Facilitator → Recipient: `{ isValid, invalidReason?, certificate: null }`. No request touches
-     4Mica core here; this is purely structural validation so recipients can pre-flight calls.
+     4mica core here; this is purely structural validation so recipients can pre-flight calls.
 6. **Recipient settles the tab**
    - Recipient → Facilitator: `POST /settle` with the same payload.
    - Facilitator: revalidates the header, then
@@ -93,11 +93,11 @@ x402-4Mica and the 4Mica core service.
 - Call `/verify` whenever an `X-PAYMENT` header appears to ensure the signature, scheme, and tab data
   all line up before trusting the client’s retry.
 - Call `/settle` once the resource work is ready to complete; persist the returned certificate as
-  proof that 4Mica extended credit for the specified amount.
+  proof that 4mica extended credit for the specified amount.
 
 ## HTTP API
 
-- `GET /supported` – returns all `(scheme, network)` tuples the facilitator can service (4Mica and,
+- `GET /supported` – returns all `(scheme, network)` tuples the facilitator can service (4mica and,
   if configured, any additional `exact` flows).
 - `GET /health` – liveness probe that returns `{ "status": "ok" }`.
 - `POST /tabs`
@@ -111,7 +111,7 @@ x402-4Mica and the 4Mica core service.
   - Response: `{ "isValid": true|false, "invalidReason"?, "certificate": null }`.
 - `POST /settle`
   - Request: same shape as `/verify`.
-  - Response: for 4Mica, `{ "success": true, "networkId": "<network>", "certificate": { "claims", "signature" } }`.
+  - Response: for 4mica, `{ "success": true, "networkId": "<network>", "certificate": { "claims", "signature" } }`.
     When delegating to the `exact` facilitator the structure mirrors upstream x402 responses and may
     include `txHash`.
 
@@ -145,7 +145,8 @@ The facilitator enforces that:
 - `payTo` equals the `recipient_address` present inside the claim.
 - `asset` and `maxAmountRequired` must match the signed `amount` exactly (no partial spends).
 - `paymentRequirements.extra.tabId` and `.userAddress` match the claim’s `tab_id` and `user_address`.
-- If `FOUR_MICA_GUARANTEE_DOMAIN` is set, the certificate domain returned by core matches it exactly.
+- If `X402_GUARANTEE_DOMAIN` is set (legacy `FOUR_MICA_GUARANTEE_DOMAIN` / `4MICA_GUARANTEE_DOMAIN`
+  are also honored), the certificate domain returned by core matches it exactly.
 
 ## Configuration
 
@@ -155,18 +156,17 @@ Environment variables (defaults shown):
 export HOST=0.0.0.0
 export PORT=8080
 export X402_SCHEME=4mica-credit
-# List of supported networks (JSON). Each entry must include `{ "network", "apiUrl" }`.
-export X402_NETWORKS='[{"network":"sepolia-mainnet","apiUrl":"https://api.4mica.xyz/"}]'
+# List of supported networks (JSON). Each entry must include `{ "network", "coreApiUrl" }`.
+export X402_NETWORKS='[{"network":"sepolia-testnet","coreApiUrl":"https://api.4mica.xyz/"}]'
 # Legacy single-network fallback if X402_NETWORKS is unset
-export X402_NETWORK=sepolia-mainnet
+export X402_NETWORK=sepolia-testnet
 
-# 4Mica public API – used to fetch operator parameters
-export FOUR_MICA_RPC_URL=https://api.4mica.xyz/
-# (alias supported for consistency with rust-sdk-4mica: 4MICA_RPC_URL)
+# 4mica public API – used to fetch operator parameters
+export X402_CORE_API_URL=https://api.4mica.xyz/
 
 # Optional: pin the expected domain separator (32-byte hex, 0x-prefixed)
-export FOUR_MICA_GUARANTEE_DOMAIN=0x...
-# (alias supported: 4MICA_GUARANTEE_DOMAIN)
+export X402_GUARANTEE_DOMAIN=0x...
+# legacy: FOUR_MICA_GUARANTEE_DOMAIN / 4MICA_GUARANTEE_DOMAIN
 
 # Optional: enable standard x402 settlement for EVM networks
 export SIGNER_TYPE=private-key
@@ -175,8 +175,8 @@ export RPC_URL_BASE=https://mainnet.base.org
 export RPC_URL_BASE_SEPOLIA=https://sepolia.base.org
 ```
 
-When `X402_NETWORKS` is present it overrides the legacy `X402_NETWORK` / `FOUR_MICA_RPC_URL`
-environment variables and enables multi-network support. Each configured network gets its own 4Mica
+When `X402_NETWORKS` is present it overrides the legacy `X402_NETWORK` / `X402_CORE_API_URL`
+environment variables and enables multi-network support. Each configured network gets its own 4mica
 Core API base URL so the facilitator can fetch operator parameters and issue guarantees for that
 network independently.
 
@@ -219,7 +219,7 @@ Run `python examples/x402_facilitator_client.py --help` inside a virtualenv with
 ## Migrate from x402
 
 The facilitator can transparently replace the EIP-3009/x402 debit flow. The key is to swap the old
-`exact` scheme for the 4Mica credit primitives described below.
+`exact` scheme for the 4mica credit primitives described below.
 
 ### Changes resource servers must make
 
@@ -256,7 +256,7 @@ The facilitator can transparently replace the EIP-3009/x402 debit flow. The key 
    match the tab exactly, so keep them synchronized.
 4. **Expect credit certificates during settlement** – `/verify` still performs structural checks and
    `/settle` now returns `{ success, networkId: "sepolia-mainnet", certificate: { claims, signature } }`.
-   Persist the certificate if you need to downstream claim remuneration via 4Mica core.
+   Persist the certificate if you need to downstream claim remuneration via 4mica core.
 
 ### Changes clients (payers) must make
 
@@ -271,7 +271,7 @@ Payers sign guarantees instead of EIP-3009 transfers. Use the official SDK locat
 
    or add the same entry manually to `Cargo.toml`.
 2. **Configure the client** – create a `Client` with the payer’s signing key. The SDK pulls the
-   remaining parameters (domain separator, operator key, etc.) from `FOUR_MICA_RPC_URL`.
+   remaining parameters (domain separator, operator key, etc.) from `X402_CORE_API_URL`.
 
    ```rust
    use rust_sdk_4mica::{Client, ConfigBuilder};
@@ -334,7 +334,7 @@ Payers sign guarantees instead of EIP-3009 transfers. Use the official SDK locat
    which slashes your posted collateral on-chain.
 
 Following these steps lets existing x402 deployments keep their HTTP surface area while relying on
-4Mica’s credit guarantees under the hood.
+4mica’s credit guarantees under the hood.
 
 ## Testing
 
@@ -343,7 +343,7 @@ cargo test
 ```
 
 Integration-style tests use a mock verifier to exercise `/verify`, `/settle`, `/tabs`, and the
-discovery endpoints without contacting 4Mica.
+discovery endpoints without contacting 4mica.
 
-Point your x402 resource server at this facilitator to outsource 4Mica guarantee verification while
+Point your x402 resource server at this facilitator to outsource 4mica guarantee verification while
 keeping custody, settlement, and tab management under your own infrastructure.

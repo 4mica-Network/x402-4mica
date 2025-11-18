@@ -34,16 +34,16 @@ impl CertificateValidator for CertificateVerifier {
         let claims = PaymentGuaranteeClaims::try_from(claims_bytes.as_slice())
             .map_err(|err| err.to_string())?;
 
-        if let Some(expected_domain) = self.guarantee_domain.as_ref() {
-            if &claims.domain != expected_domain {
-                let mut domain_hex = String::from("0x");
-                for byte in claims.domain {
-                    write!(&mut domain_hex, "{byte:02x}").unwrap();
-                }
-                return Err(format!(
-                    "guarantee domain mismatch: got {domain_hex}, expected configured domain"
-                ));
+        if let Some(expected_domain) = self.guarantee_domain.as_ref()
+            && &claims.domain != expected_domain
+        {
+            let mut domain_hex = String::from("0x");
+            for byte in claims.domain {
+                write!(&mut domain_hex, "{byte:02x}").unwrap();
             }
+            return Err(format!(
+                "guarantee domain mismatch: got {domain_hex}, expected configured domain"
+            ));
         }
 
         Ok(claims)

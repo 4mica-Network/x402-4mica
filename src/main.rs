@@ -26,11 +26,11 @@ async fn main() -> anyhow::Result<()> {
         ServiceConfig::from_env().context("failed to load facilitator configuration")?;
     let mut four_mica_handlers = Vec::new();
     for network in &service_cfg.networks {
-        let public_params = load_public_params(&network.api_base_url)
+        let public_params = load_public_params(&network.core_api_base_url)
             .await
             .with_context(|| {
                 format!(
-                    "failed to load 4Mica public parameters for network {}",
+                    "failed to load 4mica public parameters for network {}",
                     network.id
                 )
             })?;
@@ -40,9 +40,9 @@ async fn main() -> anyhow::Result<()> {
             public_params.guarantee_domain,
         )) as Arc<dyn CertificateValidator>;
         let issuer = Arc::new(
-            LiveGuaranteeIssuer::try_new(network.api_base_url.clone()).with_context(|| {
+            LiveGuaranteeIssuer::try_new(network.core_api_base_url.clone()).with_context(|| {
                 format!(
-                    "failed to initialize 4Mica guarantee issuer for network {}",
+                    "failed to initialize 4mica guarantee issuer for network {}",
                     network.id
                 )
             })?,
@@ -57,7 +57,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let tab_service: Option<Arc<dyn TabService>> = service_cfg.networks.first().map(|network| {
-        Arc::new(CoreTabService::new(network.api_base_url.clone())) as Arc<dyn TabService>
+        Arc::new(CoreTabService::new(network.core_api_base_url.clone())) as Arc<dyn TabService>
     });
 
     let exact_service: Option<Arc<dyn ExactService>> = match X402ExactService::try_from_env().await

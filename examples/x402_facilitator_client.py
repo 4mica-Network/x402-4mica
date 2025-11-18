@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-x402-4Mica client walkthrough.
+x402-4mica client walkthrough.
 
 Entities involved in a payment:
   - Client (this script): calls a protected resource, constructs the guarantee request,
     signs it with the user's private key, and submits the payment evidence to the facilitator.
   - Resource Server: exposes the paid API. When the user has not paid yet it answers 402 and
     returns the `paymentRequirements` that describe what must be signed.
-  - Facilitator (x402-4Mica): verifies the signed header and asks 4Mica core for a BLS guarantee.
+  - Facilitator (x402-4mica): verifies the signed header and asks 4mica core for a BLS guarantee.
 
 This script focuses on the client view:
   1. Call the paid API and extract the payment requirements.
@@ -15,7 +15,7 @@ This script focuses on the client view:
   3. Submit `/verify` or `/settle` to the facilitator and pretty-print the response.
 
 Signing is intentionally pluggable: supply either an already signed payment header or provide the
-claims JSON and signature (which you can obtain from your wallet tooling or the 4Mica Rust SDK).
+claims JSON and signature (which you can obtain from your wallet tooling or the 4mica Rust SDK).
 """
 from __future__ import annotations
 
@@ -532,7 +532,7 @@ def ensure_collateral_for_request(
     required_amount: int,
     timeout: float,
 ) -> None:
-    """Ensure the caller has enough collateral recorded by 4Mica core."""
+    """Ensure the caller has enough collateral recorded by 4mica core."""
 
     if required_amount <= 0:
         return
@@ -876,7 +876,7 @@ def _rpc_request(
 
 
 class FacilitatorApi:
-    """Minimal HTTP client for the x402-4Mica facilitator."""
+    """Minimal HTTP client for the x402-4mica facilitator."""
 
     def __init__(self, base_url: str, timeout: float = 10.0) -> None:
         self.base_url = base_url.rstrip("/")
@@ -1095,7 +1095,7 @@ def _prepare_credit_payment(
     to_checksum_address: Any,
 ) -> Tuple[PaymentRequirements, str, JsonDict]:
     core_url = args.core_url or resolve_config_value(
-        ("FOUR_MICA_RPC_URL", "4MICA_RPC_URL"),
+        "X402_CORE_API_URL",
         env_map,
         required=False,
         default="http://localhost:3000",
@@ -1459,7 +1459,7 @@ def run_auto(api: FacilitatorApi, args: argparse.Namespace) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Client utilities for interacting with an x402-4Mica facilitator.",
+        description="Client utilities for interacting with an x402-4mica facilitator.",
     )
     parser.add_argument(
         "--base-url",
@@ -1528,7 +1528,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     auto_parser.add_argument(
         "--core-url",
-        help="Override FOUR_MICA_RPC_URL / 4MICA_RPC_URL for fetching core public parameters.",
+        help="Override X402_CORE_API_URL for fetching core public parameters.",
     )
     auto_parser.add_argument(
         "--amount",
@@ -1570,7 +1570,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--payment-method",
         choices=["credit", "debit"],
         default="credit",
-        help="Select credit (4Mica guarantee) or debit (exact on-chain) settlement path (default: %(default)s).",
+        help="Select credit (4mica guarantee) or debit (exact on-chain) settlement path (default: %(default)s).",
     )
     auto_parser.add_argument(
         "--registration-amount",

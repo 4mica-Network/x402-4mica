@@ -4,15 +4,18 @@ use anyhow::{Context, Result, bail};
 use reqwest::Url;
 use serde::Deserialize;
 
-const DEFAULT_API_URL: &str = "https://api.4mica.xyz/";
-const ENV_API_URLS: [&str; 2] = ["FOUR_MICA_RPC_URL", "4MICA_RPC_URL"];
+const DEFAULT_CORE_API_URL: &str = "https://api.4mica.xyz/";
 const ENV_SCHEME: &str = "X402_SCHEME";
 const ENV_NETWORK: &str = "X402_NETWORK";
 const ENV_NETWORKS: &str = "X402_NETWORKS";
+const ENV_CORE_API_URL: &str = "X402_CORE_API_URL";
 const ENV_HOST: &str = "HOST";
 const ENV_PORT: &str = "PORT";
-const ENV_GUARANTEE_DOMAIN_VARIANTS: [&str; 2] =
-    ["FOUR_MICA_GUARANTEE_DOMAIN", "4MICA_GUARANTEE_DOMAIN"];
+const ENV_GUARANTEE_DOMAIN_VARIANTS: [&str; 3] = [
+    "X402_GUARANTEE_DOMAIN",
+    "FOUR_MICA_GUARANTEE_DOMAIN",
+    "4MICA_GUARANTEE_DOMAIN",
+];
 const DEFAULT_NETWORK_ID: &str = "sepolia-mainnet";
 
 #[derive(Clone)]
@@ -25,24 +28,16 @@ pub struct ServiceConfig {
 #[derive(Clone)]
 pub struct NetworkConfig {
     pub id: String,
-    pub api_base_url: Url,
+    pub core_api_base_url: Url,
 }
 
 impl ServiceConfig {
     pub fn from_env() -> Result<Self> {
-        let host = std::env::var(ENV_HOST).unwrap_or_else(|_| "0.0.0.0".into());
-        let port = std::env::var(ENV_PORT)
-            .ok()
-            .and_then(|p| p.parse::<u16>().ok())
-            .unwrap_or(8080);
+        let bind_addr = bind_addr_from_env()?;
         let scheme = std::env::var(ENV_SCHEME).unwrap_or_else(|_| "4mica-credit".into());
         let networks = load_networks_from_env()?;
-        let addr = format!("{host}:{port}")
-            .parse()
-            .with_context(|| format!("invalid HOST/PORT combination: {host}:{port}"))?;
-
         Ok(Self {
-            bind_addr: addr,
+            bind_addr,
             scheme,
             networks,
         })
@@ -64,7 +59,7 @@ struct CorePublicParameters {
 #[serde(rename_all = "camelCase")]
 struct NetworkEnvConfig {
     network: String,
-    api_url: String,
+    core_api_url: String,
 }
 
 pub async fn load_public_params(api_base: &Url) -> Result<PublicParameters> {
@@ -89,12 +84,12 @@ fn load_networks_from_env() -> Result<Vec<NetworkConfig>> {
     }
 
     let network = std::env::var(ENV_NETWORK).unwrap_or_else(|_| DEFAULT_NETWORK_ID.into());
-    let api_url = first_env_value(&ENV_API_URLS).unwrap_or_else(|| DEFAULT_API_URL.into());
+    let api_url = std::env::var(ENV_CORE_API_URL).unwrap_or_else(|_| DEFAULT_CORE_API_URL.into());
     let api_base_url = normalize_url(&api_url)?;
 
     Ok(vec![NetworkConfig {
         id: network,
-        api_base_url,
+        core_api_base_url: api_base_url,
     }])
 }
 
@@ -102,7 +97,7 @@ fn parse_network_list(raw: &str) -> Result<Vec<NetworkConfig>> {
     let entries: Vec<NetworkEnvConfig> = serde_json::from_str(raw).with_context(|| {
         format!(
             "{ENV_NETWORKS} must be JSON like \
-        '[{{\"network\":\"sepolia-mainnet\",\"apiUrl\":\"https://api.4mica.xyz/\"}}]'"
+        '[{{\"network\":\"sepolia-mainnet\",\"coreApiUrl\":\"https://api.4mica.xyz/\"}}]'"
         )
     })?;
     if entries.is_empty() {
@@ -115,15 +110,27 @@ fn parse_network_list(raw: &str) -> Result<Vec<NetworkConfig>> {
         if network.is_empty() {
             bail!("{ENV_NETWORKS} entries require a non-empty `network` field");
         }
-        let url = normalize_url(entry.api_url.trim())
-            .with_context(|| format!("failed to parse apiUrl for network {}", entry.network))?;
+        let url = normalize_url(entry.core_api_url.trim())
+            .with_context(|| format!("failed to parse coreApiUrl for network {}", entry.network))?;
         configs.push(NetworkConfig {
             id: network.to_owned(),
-            api_base_url: url,
+            core_api_base_url: url,
         });
     }
 
     Ok(configs)
+}
+
+fn bind_addr_from_env() -> Result<SocketAddr> {
+    let host = std::env::var(ENV_HOST).unwrap_or_else(|_| "0.0.0.0".into());
+    let port = std::env::var(ENV_PORT)
+        .ok()
+        .and_then(|p| p.parse::<u16>().ok())
+        .unwrap_or(8080);
+    let addr = format!("{host}:{port}")
+        .parse()
+        .with_context(|| format!("invalid HOST/PORT combination: {host}:{port}"))?;
+    Ok(addr)
 }
 
 fn first_env_value(names: &[&str]) -> Option<String> {
