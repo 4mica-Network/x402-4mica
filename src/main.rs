@@ -24,27 +24,41 @@ async fn main() -> anyhow::Result<()> {
 
     let service_cfg =
         ServiceConfig::from_env().context("failed to load facilitator configuration")?;
-    let public_params = load_public_params()
-        .await
-        .context("failed to load 4Mica public parameters")?;
+    let mut four_mica_handlers = Vec::new();
+    for network in &service_cfg.networks {
+        let public_params = load_public_params(&network.api_base_url)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to load 4Mica public parameters for network {}",
+                    network.id
+                )
+            })?;
 
-    let api_base_url = public_params.api_base_url.clone();
-    let verifier = Arc::new(CertificateVerifier::new(
-        public_params.operator_public_key,
-        public_params.guarantee_domain,
-    ));
-    let issuer = Arc::new(
-        LiveGuaranteeIssuer::try_new(api_base_url.clone())
-            .context("failed to initialize 4Mica guarantee issuer")?,
-    );
-    let tab_service: Option<Arc<dyn TabService>> =
-        Some(Arc::new(CoreTabService::new(api_base_url.clone())) as Arc<dyn TabService>);
-    let four_mica_handler = FourMicaHandler::new(
-        service_cfg.scheme.clone(),
-        service_cfg.network.clone(),
-        verifier.clone() as Arc<dyn CertificateValidator>,
-        issuer.clone() as Arc<dyn GuaranteeIssuer>,
-    );
+        let verifier = Arc::new(CertificateVerifier::new(
+            public_params.operator_public_key,
+            public_params.guarantee_domain,
+        )) as Arc<dyn CertificateValidator>;
+        let issuer = Arc::new(
+            LiveGuaranteeIssuer::try_new(network.api_base_url.clone()).with_context(|| {
+                format!(
+                    "failed to initialize 4Mica guarantee issuer for network {}",
+                    network.id
+                )
+            })?,
+        ) as Arc<dyn GuaranteeIssuer>;
+
+        four_mica_handlers.push(FourMicaHandler::new(
+            service_cfg.scheme.clone(),
+            network.id.clone(),
+            verifier,
+            issuer,
+        ));
+    }
+
+    let tab_service: Option<Arc<dyn TabService>> = service_cfg.networks.first().map(|network| {
+        Arc::new(CoreTabService::new(network.api_base_url.clone())) as Arc<dyn TabService>
+    });
 
     let exact_service: Option<Arc<dyn ExactService>> = match X402ExactService::try_from_env().await
     {
@@ -56,7 +70,7 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    let state = AppState::new(Some(four_mica_handler), tab_service, exact_service);
+    let state = AppState::new(four_mica_handlers, tab_service, exact_service);
 
     server::run(service_cfg, state).await
 }

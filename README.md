@@ -57,7 +57,7 @@ x402-4Mica and the 4Mica core service.
    - Recipient → Facilitator: `POST /verify` with
      `{ x402Version, paymentHeader, paymentRequirements }`.
    - Facilitator: decodes `paymentHeader`, ensures `scheme`/`network` match `/supported`, confirms
-     the claims reference the advertised tab, user, asset, `payTo`, and that `amount` does not exceed
+     the claims reference the advertised tab, user, asset, `payTo`, and that `amount` exactly equals
      `maxAmountRequired`.
    - Facilitator → Recipient: `{ isValid, invalidReason?, certificate: null }`. No request touches
      4Mica core here; this is purely structural validation so recipients can pre-flight calls.
@@ -122,8 +122,8 @@ x402-4Mica and the 4Mica core service.
 ```json
 {
   "x402Version": 1,
-  "scheme": "4mica-guarantee",
-  "network": "4mica-mainnet",
+  "scheme": "4mica-credit",
+  "network": "sepolia-mainnet",
   "payload": {
     "claims": {
       "user_address": "<0x-prefixed checksum string>",
@@ -143,7 +143,7 @@ The facilitator enforces that:
 
 - `scheme` / `network` match both `/supported` and the resource server’s requirements.
 - `payTo` equals the `recipient_address` present inside the claim.
-- `asset` and `maxAmountRequired` bound the signed `amount`.
+- `asset` and `maxAmountRequired` must match the signed `amount` exactly (no partial spends).
 - `paymentRequirements.extra.tabId` and `.userAddress` match the claim’s `tab_id` and `user_address`.
 - If `FOUR_MICA_GUARANTEE_DOMAIN` is set, the certificate domain returned by core matches it exactly.
 
@@ -154,8 +154,11 @@ Environment variables (defaults shown):
 ```bash
 export HOST=0.0.0.0
 export PORT=8080
-export X402_SCHEME=4mica-guarantee
-export X402_NETWORK=4mica-mainnet
+export X402_SCHEME=4mica-credit
+# List of supported networks (JSON). Each entry must include `{ "network", "apiUrl" }`.
+export X402_NETWORKS='[{"network":"sepolia-mainnet","apiUrl":"https://api.4mica.xyz/"}]'
+# Legacy single-network fallback if X402_NETWORKS is unset
+export X402_NETWORK=sepolia-mainnet
 
 # 4Mica public API – used to fetch operator parameters
 export FOUR_MICA_RPC_URL=https://api.4mica.xyz/
@@ -171,6 +174,11 @@ export EVM_PRIVATE_KEY=0x...
 export RPC_URL_BASE=https://mainnet.base.org
 export RPC_URL_BASE_SEPOLIA=https://sepolia.base.org
 ```
+
+When `X402_NETWORKS` is present it overrides the legacy `X402_NETWORK` / `FOUR_MICA_RPC_URL`
+environment variables and enables multi-network support. Each configured network gets its own 4Mica
+Core API base URL so the facilitator can fetch operator parameters and issue guarantees for that
+network independently.
 
 On startup the facilitator loads the public parameters described above and, if the optional x402
 variables are present, initialises the upstream `exact` ERC-3009 facilitator as well. Any schemes
@@ -227,8 +235,8 @@ The facilitator can transparently replace the EIP-3009/x402 debit flow. The key 
 
    ```jsonc
    {
-     "scheme": "4mica-guarantee",
-     "network": "4mica-mainnet",
+     "scheme": "4mica-credit",
+     "network": "sepolia-mainnet",
      "maxAmountRequired": "<decimal or 0x amount>",
      "resource": "/your/resource",
      "description": "Describe the protected work",
@@ -247,7 +255,7 @@ The facilitator can transparently replace the EIP-3009/x402 debit flow. The key 
    The facilitator enforces that `scheme`, `network`, `payTo`, `asset`, `tabId`, and `userAddress`
    match the tab exactly, so keep them synchronized.
 4. **Expect credit certificates during settlement** – `/verify` still performs structural checks and
-   `/settle` now returns `{ success, networkId: "4mica-mainnet", certificate: { claims, signature } }`.
+   `/settle` now returns `{ success, networkId: "sepolia-mainnet", certificate: { claims, signature } }`.
    Persist the certificate if you need to downstream claim remuneration via 4Mica core.
 
 ### Changes clients (payers) must make
@@ -300,8 +308,8 @@ Payers sign guarantees instead of EIP-3009 transfers. Use the official SDK locat
        .await?;
    ```
 
-5. **Build the `X-PAYMENT` header** – wrap `{ x402Version: 1, scheme: "4mica-guarantee", network:
-   "4mica-mainnet", payload: { claims, signature, signingScheme: "eip712" } }` into base64 (see
+5. **Build the `X-PAYMENT` header** – wrap `{ x402Version: 1, scheme: "4mica-credit", network:
+   "sepolia-mainnet", payload: { claims, signature, signingScheme: "eip712" } }` into base64 (see
    `examples/x402_facilitator_client.py::compose_payment_header`) and send it alongside the retrying
    HTTP request.
 6. **Settle your tabs** – every tab response includes `ttlSeconds`, which is the settlement window in

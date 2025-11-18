@@ -116,7 +116,7 @@ async fn settle_endpoint_returns_certificate() {
     assert!(payload.success);
     assert!(payload.certificate.is_some());
     assert!(payload.tx_hash.is_none());
-    assert_eq!(payload.network_id.as_deref(), Some("4mica-mainnet"));
+    assert_eq!(payload.network_id.as_deref(), Some("sepolia-mainnet"));
     assert_eq!(verifier.verify_calls(), 1);
     assert_eq!(issuer.issue_calls(), 1);
 }
@@ -142,8 +142,8 @@ async fn supported_endpoint_returns_configured_kind() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let payload: Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(payload["kinds"][0]["scheme"], "4mica-guarantee");
-    assert_eq!(payload["kinds"][0]["network"], "4mica-mainnet");
+    assert_eq!(payload["kinds"][0]["scheme"], "4mica-credit");
+    assert_eq!(payload["kinds"][0]["network"], "sepolia-mainnet");
 }
 
 #[tokio::test]
@@ -151,14 +151,14 @@ async fn supported_includes_exact_when_available() {
     let verifier = Arc::new(MockVerifier::success());
     let issuer = Arc::new(MockIssuer::success());
     let handler = FourMicaHandler::new(
-        "4mica-guarantee".into(),
-        "4mica-mainnet".into(),
+        "4mica-credit".into(),
+        "sepolia-mainnet".into(),
         verifier as Arc<dyn CertificateValidator>,
         issuer as Arc<dyn GuaranteeIssuer>,
     );
     let exact = Arc::new(MockExact::new());
     let state = AppState::new(
-        Some(handler),
+        vec![handler],
         None,
         Some(exact.clone() as Arc<dyn ExactService>),
     );
@@ -181,7 +181,7 @@ async fn supported_includes_exact_when_available() {
     let payload: Value = serde_json::from_slice(&body).unwrap();
     let kinds = payload["kinds"].as_array().expect("kinds array");
     assert_eq!(kinds.len(), 2);
-    assert!(kinds.iter().any(|k| k["scheme"] == "4mica-guarantee"));
+    assert!(kinds.iter().any(|k| k["scheme"] == "4mica-credit"));
     assert!(kinds.iter().any(|k| k["scheme"] == "exact"));
 }
 
@@ -221,7 +221,7 @@ async fn tabs_endpoint_returns_response_from_service() {
     };
     let service = Arc::new(MockTabService::success(tab_response.clone()));
     let state = Arc::new(AppState::new(
-        None,
+        Vec::new(),
         Some(service as Arc<dyn TabService>),
         None,
     ));
@@ -234,10 +234,7 @@ async fn tabs_endpoint_returns_response_from_service() {
         ttl_seconds: Some(60),
     };
 
-    let response = router
-        .oneshot(post_json("/tabs", &request))
-        .await
-        .unwrap();
+    let response = router.oneshot(post_json("/tabs", &request)).await.unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
@@ -248,7 +245,7 @@ async fn tabs_endpoint_returns_response_from_service() {
 
 #[tokio::test]
 async fn tabs_endpoint_returns_not_implemented_when_disabled() {
-    let state = Arc::new(AppState::new(None, None, None));
+    let state = Arc::new(AppState::new(Vec::new(), None, None));
     let router = build_router(state);
 
     let request = CreateTabRequest {
@@ -258,18 +255,17 @@ async fn tabs_endpoint_returns_not_implemented_when_disabled() {
         ttl_seconds: None,
     };
 
-    let response = router
-        .oneshot(post_json("/tabs", &request))
-        .await
-        .unwrap();
+    let response = router.oneshot(post_json("/tabs", &request)).await.unwrap();
 
     assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let payload: Value = serde_json::from_slice(&body).unwrap();
-    assert!(payload["error"]
-        .as_str()
-        .unwrap()
-        .contains("tab provisioning"));
+    assert!(
+        payload["error"]
+            .as_str()
+            .unwrap()
+            .contains("tab provisioning")
+    );
 }
 
 #[tokio::test]
@@ -279,7 +275,7 @@ async fn tabs_endpoint_propagates_upstream_errors() {
         message: "user not registered".into(),
     }));
     let state = Arc::new(AppState::new(
-        None,
+        Vec::new(),
         Some(service as Arc<dyn TabService>),
         None,
     ));
@@ -292,18 +288,17 @@ async fn tabs_endpoint_propagates_upstream_errors() {
         ttl_seconds: Some(60),
     };
 
-    let response = router
-        .oneshot(post_json("/tabs", &request))
-        .await
-        .unwrap();
+    let response = router.oneshot(post_json("/tabs", &request)).await.unwrap();
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let payload: Value = serde_json::from_slice(&body).unwrap();
-    assert!(payload["error"]
-        .as_str()
-        .unwrap()
-        .contains("user not registered"));
+    assert!(
+        payload["error"]
+            .as_str()
+            .unwrap()
+            .contains("user not registered")
+    );
 }
 
 #[tokio::test]
@@ -454,23 +449,23 @@ async fn settle_rejects_invalid_version() {
 
 fn test_state(verifier: Arc<MockVerifier>, issuer: Arc<MockIssuer>) -> SharedState {
     let handler = FourMicaHandler::new(
-        "4mica-guarantee".into(),
-        "4mica-mainnet".into(),
+        "4mica-credit".into(),
+        "sepolia-mainnet".into(),
         verifier.clone() as Arc<dyn CertificateValidator>,
         issuer.clone() as Arc<dyn GuaranteeIssuer>,
     );
-    Arc::new(AppState::new(Some(handler), None, None))
+    Arc::new(AppState::new(vec![handler], None, None))
 }
 
 fn exact_state(exact: Arc<MockExact>) -> SharedState {
     let exact_service: Arc<dyn ExactService> = exact;
-    Arc::new(AppState::new(None, None, Some(exact_service)))
+    Arc::new(AppState::new(Vec::new(), None, Some(exact_service)))
 }
 
 fn sample_requirements() -> PaymentRequirements {
     PaymentRequirements {
-        scheme: "4mica-guarantee".into(),
-        network: "4mica-mainnet".into(),
+        scheme: "4mica-credit".into(),
+        network: "sepolia-mainnet".into(),
         max_amount_required: "10".into(),
         resource: None,
         description: None,
@@ -492,8 +487,8 @@ fn encoded_header() -> String {
     BASE64_STANDARD.encode(
         json!({
             "x402Version": 1,
-            "scheme": "4mica-guarantee",
-            "network": "4mica-mainnet",
+            "scheme": "4mica-credit",
+            "network": "sepolia-mainnet",
             "payload": {
                     "claims": {
                         "user_address": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",

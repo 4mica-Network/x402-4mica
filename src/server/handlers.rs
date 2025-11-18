@@ -10,8 +10,8 @@ use tower_http::trace::TraceLayer;
 use tracing::{info, warn};
 
 use super::state::{
-    CreateTabRequest, HealthResponse, SettleRequest, SettleResponse, SharedState, SupportedResponse,
-    TabError, VerifyRequest, VerifyResponse,
+    CreateTabRequest, HealthResponse, SettleRequest, SettleResponse, SharedState,
+    SupportedResponse, TabError, VerifyRequest, VerifyResponse,
 };
 
 pub(super) fn build_router(state: SharedState) -> Router {

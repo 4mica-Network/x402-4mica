@@ -24,14 +24,14 @@ const ETH_SENTINEL_ADDRESS: &str = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
 pub(super) type SharedState = Arc<AppState>;
 
 pub(crate) struct AppState {
-    four_mica: Option<FourMicaHandler>,
+    four_mica: Vec<FourMicaHandler>,
     tab_service: Option<Arc<dyn TabService>>,
     exact: Option<Arc<dyn ExactService>>,
 }
 
 impl AppState {
     pub fn new(
-        four_mica: Option<FourMicaHandler>,
+        four_mica: Vec<FourMicaHandler>,
         tab_service: Option<Arc<dyn TabService>>,
         exact: Option<Arc<dyn ExactService>>,
     ) -> Self {
@@ -44,8 +44,8 @@ impl AppState {
 
     pub fn network(&self) -> &str {
         self.four_mica
-            .as_ref()
-            .map(|handler| handler.network.as_str())
+            .first()
+            .map(|handler| handler.network())
             .unwrap_or("unknown")
     }
 
@@ -56,9 +56,15 @@ impl AppState {
         Ok(())
     }
 
+    fn handler_for(&self, scheme: &str, network: &str) -> Option<&FourMicaHandler> {
+        self.four_mica
+            .iter()
+            .find(|handler| handler.matches(scheme, network))
+    }
+
     pub async fn supported(&self) -> Vec<SupportedKind> {
         let mut kinds = Vec::new();
-        if let Some(handler) = &self.four_mica {
+        for handler in &self.four_mica {
             kinds.push(handler.supported_kind());
         }
         if let Some(exact) = &self.exact {
@@ -75,15 +81,13 @@ impl AppState {
     }
 
     pub async fn verify(&self, request: &VerifyRequest) -> Result<VerifyResponse, ValidationError> {
-        if let Some(handler) = &self.four_mica {
-            if handler.matches(
-                &request.payment_requirements.scheme,
-                &request.payment_requirements.network,
-            ) {
-                return handler
-                    .verify(&request.payment_header, &request.payment_requirements)
-                    .await;
-            }
+        if let Some(handler) = self.handler_for(
+            &request.payment_requirements.scheme,
+            &request.payment_requirements.network,
+        ) {
+            return handler
+                .verify(&request.payment_header, &request.payment_requirements)
+                .await;
         }
 
         if let Some(exact) = &self.exact {
@@ -96,15 +100,13 @@ impl AppState {
     }
 
     pub async fn settle(&self, request: &SettleRequest) -> Result<SettleResponse, ValidationError> {
-        if let Some(handler) = &self.four_mica {
-            if handler.matches(
-                &request.payment_requirements.scheme,
-                &request.payment_requirements.network,
-            ) {
-                return handler
-                    .settle(&request.payment_header, &request.payment_requirements)
-                    .await;
-            }
+        if let Some(handler) = self.handler_for(
+            &request.payment_requirements.scheme,
+            &request.payment_requirements.network,
+        ) {
+            return handler
+                .settle(&request.payment_header, &request.payment_requirements)
+                .await;
         }
 
         if let Some(exact) = &self.exact {
@@ -147,6 +149,10 @@ impl FourMicaHandler {
             verifier,
             issuer,
         }
+    }
+
+    pub(crate) fn network(&self) -> &str {
+        &self.network
     }
 
     fn matches(&self, scheme: &str, network: &str) -> bool {
@@ -348,10 +354,7 @@ impl FourMicaHandler {
 
 #[async_trait]
 pub(crate) trait TabService: Send + Sync {
-    async fn create_tab(
-        &self,
-        request: &CreateTabRequest,
-    ) -> Result<CreateTabResponse, TabError>;
+    async fn create_tab(&self, request: &CreateTabRequest) -> Result<CreateTabResponse, TabError>;
 }
 
 #[derive(Clone)]
@@ -398,13 +401,10 @@ impl CoreTabService {
         T: for<'de> Deserialize<'de>,
     {
         let status = response.status();
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|err| TabError::Upstream {
-                status,
-                message: err.to_string(),
-            })?;
+        let bytes = response.bytes().await.map_err(|err| TabError::Upstream {
+            status,
+            message: err.to_string(),
+        })?;
         if status.is_success() {
             serde_json::from_slice(&bytes).map_err(|err| TabError::Upstream {
                 status,
@@ -419,10 +419,7 @@ impl CoreTabService {
 
 #[async_trait]
 impl TabService for CoreTabService {
-    async fn create_tab(
-        &self,
-        request: &CreateTabRequest,
-    ) -> Result<CreateTabResponse, TabError> {
+    async fn create_tab(&self, request: &CreateTabRequest) -> Result<CreateTabResponse, TabError> {
         let payload = CoreCreateTabRequest {
             user_address: request.user_address.clone(),
             recipient_address: request.recipient_address.clone(),
