@@ -63,17 +63,14 @@ impl AppState {
     }
 
     pub async fn supported(&self) -> Vec<SupportedKind> {
-        let mut kinds = Vec::new();
-        for handler in &self.four_mica {
-            kinds.push(handler.supported_kind());
-        }
+        let mut kinds = self
+            .four_mica
+            .iter()
+            .map(FourMicaHandler::supported_kind)
+            .collect::<Vec<_>>();
         if let Some(exact) = &self.exact {
             match exact.supported().await {
-                Ok(list) => {
-                    for (scheme, network) in list {
-                        kinds.push(SupportedKind { scheme, network });
-                    }
-                }
+                Ok(list) => kinds.extend(list),
                 Err(err) => tracing::warn!(reason = %err, "failed to fetch exact supported kinds"),
             }
         }
@@ -163,6 +160,8 @@ impl FourMicaHandler {
         SupportedKind {
             scheme: self.scheme.clone(),
             network: self.network.clone(),
+            x402_version: Some(SUPPORTED_VERSION),
+            extra: None,
         }
     }
 
@@ -465,20 +464,24 @@ fn current_timestamp() -> i64 {
 pub(crate) trait ExactService: Send + Sync {
     async fn verify(&self, request: &VerifyRequest) -> Result<VerifyResponse, ValidationError>;
     async fn settle(&self, request: &SettleRequest) -> Result<SettleResponse, ValidationError>;
-    async fn supported(&self) -> Result<Vec<(String, String)>, ValidationError>;
+    async fn supported(&self) -> Result<Vec<SupportedKind>, ValidationError>;
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SupportedKind {
-    scheme: String,
-    network: String,
+    pub scheme: String,
+    pub network: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x402_version: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extra: Option<Value>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SupportedResponse {
-    kinds: Vec<SupportedKind>,
+    pub kinds: Vec<SupportedKind>,
 }
 
 impl SupportedResponse {

@@ -10,7 +10,7 @@ use std::sync::Arc;
 use anyhow::Context;
 
 use crate::config::{ServiceConfig, load_public_params};
-use crate::exact::X402ExactService;
+use crate::exact::try_from_env as build_exact_service;
 use crate::issuer::{GuaranteeIssuer, LiveGuaranteeIssuer};
 use crate::server::state::{AppState, CoreTabService, ExactService, FourMicaHandler, TabService};
 use crate::verifier::{CertificateValidator, CertificateVerifier};
@@ -60,15 +60,7 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(CoreTabService::new(network.core_api_base_url.clone())) as Arc<dyn TabService>
     });
 
-    let exact_service: Option<Arc<dyn ExactService>> = match X402ExactService::try_from_env().await
-    {
-        Ok(Some(service)) => Some(Arc::new(service) as Arc<dyn ExactService>),
-        Ok(None) => None,
-        Err(err) => {
-            tracing::warn!(reason = %err, "exact scheme facilitator disabled");
-            None
-        }
-    };
+    let exact_service: Option<Arc<dyn ExactService>> = build_exact_service().await?;
 
     let state = AppState::new(four_mica_handlers, tab_service, exact_service);
 

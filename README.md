@@ -114,6 +114,8 @@ x402-4mica and the 4mica core service.
   - Response: for 4mica, `{ "success": true, "networkId": "<network>", "certificate": { "claims", "signature" } }`.
     When delegating to the `exact` facilitator the structure mirrors upstream x402 responses and may
     include `txHash`.
+    If `X402_DEBIT_URL` is set, debit requests are proxied to the configured x402-rs
+    facilitator, allowing clients to follow the x402 debit flow unchanged.
 
 ## X-PAYMENT header schema
 
@@ -168,6 +170,9 @@ export X402_CORE_API_URL=https://api.4mica.xyz/
 export X402_GUARANTEE_DOMAIN=0x...
 # legacy: FOUR_MICA_GUARANTEE_DOMAIN / 4MICA_GUARANTEE_DOMAIN
 
+# Optional: proxy x402 debit flows to an existing x402-rs facilitator
+export X402_DEBIT_URL=https://x402.example.com/
+
 # Optional: enable standard x402 settlement for EVM networks
 export SIGNER_TYPE=private-key
 export EVM_PRIVATE_KEY=0x...
@@ -183,6 +188,8 @@ network independently.
 On startup the facilitator loads the public parameters described above and, if the optional x402
 variables are present, initialises the upstream `exact` ERC-3009 facilitator as well. Any schemes
 that fail to initialise are omitted from `/supported`.
+When `X402_DEBIT_URL` is provided, `/supported` also includes the debit schemes advertised by
+the referenced x402-rs facilitator, and `/verify` / `/settle` proxy those requests to it.
 
 ## Running
 

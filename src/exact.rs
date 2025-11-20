@@ -1,27 +1,78 @@
 use std::sync::Arc;
 
+use anyhow::Context;
 use async_trait::async_trait;
-use tracing::warn;
+use reqwest::{Client, Url};
+use tracing::{info, warn};
 use x402_rs::facilitator::Facilitator;
 use x402_rs::facilitator_local::FacilitatorLocal;
 use x402_rs::provider_cache::{ProviderCache, ProviderMap};
 use x402_rs::types::{
     Base64Bytes, PaymentPayload, PaymentRequirements as XPaymentRequirements,
     SettleRequest as XSettleRequest, SettleResponse as XSettleResponse,
-    SupportedPaymentKindsResponse, VerifyRequest as XVerifyRequest,
+    SupportedPaymentKind, SupportedPaymentKindsResponse, VerifyRequest as XVerifyRequest,
     VerifyResponse as XVerifyResponse, X402Version,
 };
 
 use crate::server::state::{
-    ExactService, PaymentRequirements, SettleRequest, SettleResponse, ValidationError,
-    VerifyRequest, VerifyResponse,
+    ExactService, PaymentRequirements, SettleRequest, SettleResponse, SupportedKind,
+    ValidationError, VerifyRequest, VerifyResponse,
 };
 
-pub struct X402ExactService {
+const ENV_DEBIT_URL: &str = "X402_DEBIT_URL";
+
+fn convert_supported_kind(
+    kind: SupportedPaymentKind,
+) -> Result<SupportedKind, ValidationError> {
+    let extra = kind
+        .extra
+        .map(|value| {
+            serde_json::to_value(value)
+                .map_err(|err| ValidationError::Exact(err.to_string()))
+        })
+        .transpose()?;
+    let x402_version = match kind.x402_version {
+        X402Version::V1 => 1,
+    };
+
+    Ok(SupportedKind {
+        scheme: kind.scheme.to_string(),
+        network: kind.network,
+        x402_version: Some(x402_version),
+        extra,
+    })
+}
+
+fn convert_supported(response: SupportedPaymentKindsResponse) -> Result<Vec<SupportedKind>, ValidationError> {
+    response
+        .kinds
+        .into_iter()
+        .map(convert_supported_kind)
+        .collect()
+}
+
+
+pub async fn try_from_env() -> anyhow::Result<Option<Arc<dyn ExactService>>> {
+    if let Some(remote) = HttpExactService::from_env()? {
+        info!(url = %remote.base_url, "using remote debit facilitator");
+        return Ok(Some(Arc::new(remote)));
+    }
+
+    match LocalExactService::try_from_env().await {
+        Ok(Some(service)) => Ok(Some(Arc::new(service))),
+        Ok(None) => Ok(None),
+        Err(err) => {
+            warn!(reason = %err, "exact scheme facilitator disabled");
+            Ok(None)
+        }
+    }
+}
+
+struct LocalExactService {
     inner: Arc<FacilitatorLocal<ProviderCache>>,
 }
 
-impl X402ExactService {
+impl LocalExactService {
     pub async fn try_from_env() -> anyhow::Result<Option<Self>> {
         let cache = match ProviderCache::from_env().await {
             Ok(cache) => cache,
@@ -132,18 +183,10 @@ impl X402ExactService {
             response.network.to_string(),
         )
     }
-
-    fn convert_supported(response: SupportedPaymentKindsResponse) -> Vec<(String, String)> {
-        response
-            .kinds
-            .into_iter()
-            .map(|kind| (kind.scheme.to_string(), kind.network.to_string()))
-            .collect()
-    }
 }
 
 #[async_trait]
-impl ExactService for X402ExactService {
+impl ExactService for LocalExactService {
     async fn verify(&self, request: &VerifyRequest) -> Result<VerifyResponse, ValidationError> {
         let converted = Self::convert_verify_request(request)?;
         let result = self
@@ -164,12 +207,121 @@ impl ExactService for X402ExactService {
         Ok(Self::convert_settle_response(result))
     }
 
-    async fn supported(&self) -> Result<Vec<(String, String)>, ValidationError> {
+    async fn supported(&self) -> Result<Vec<SupportedKind>, ValidationError> {
         let response = self
             .inner
             .supported()
             .await
             .map_err(|err| ValidationError::Exact(err.to_string()))?;
-        Ok(Self::convert_supported(response))
+        convert_supported(response)
+    }
+}
+
+struct HttpExactService {
+    client: Client,
+    base_url: Url,
+}
+
+impl HttpExactService {
+    fn from_env() -> anyhow::Result<Option<Self>> {
+        let Some((raw, source)) = Self::debit_url_from_env() else {
+            return Ok(None);
+        };
+
+        let base_url = Url::parse(&raw)
+            .or_else(|_| Url::parse(&format!("{raw}/")))
+            .with_context(|| format!("failed to parse {source}"))?;
+
+        Ok(Some(Self {
+            client: Client::new(),
+            base_url,
+        }))
+    }
+
+    fn debit_url_from_env() -> Option<(String, &'static str)> {
+        let sanitize = |value: String| {
+            let trimmed = value.trim().to_string();
+            (!trimmed.is_empty()).then_some(trimmed)
+        };
+
+        let Some(url) = std::env::var(ENV_DEBIT_URL).ok().and_then(sanitize) else {
+            return None;
+        };
+        Some((url, ENV_DEBIT_URL))
+    }
+
+    fn url(&self, path: &str) -> Result<Url, ValidationError> {
+        self.base_url
+            .join(path)
+            .map_err(|err| ValidationError::Exact(format!("invalid debit facilitator URL: {err}")))
+    }
+
+    async fn post<Req, Resp>(&self, path: &str, payload: &Req) -> Result<Resp, ValidationError>
+    where
+        Req: serde::Serialize + ?Sized,
+        Resp: for<'de> serde::Deserialize<'de>,
+    {
+        let url = self.url(path)?;
+        let response = self
+            .client
+            .post(url)
+            .json(payload)
+            .send()
+            .await
+            .map_err(|err| {
+                ValidationError::Exact(format!("failed to POST debit facilitator: {err}"))
+            })?;
+        Self::parse_response(response).await
+    }
+
+    async fn parse_response<T: for<'de> serde::Deserialize<'de>>(
+        response: reqwest::Response,
+    ) -> Result<T, ValidationError> {
+        let status = response.status();
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|err| ValidationError::Exact(err.to_string()))?;
+
+        if !status.is_success() {
+            let body = String::from_utf8_lossy(&bytes);
+            return Err(ValidationError::Exact(format!(
+                "debit facilitator returned {status}: {body}"
+            )));
+        }
+
+        serde_json::from_slice(&bytes).map_err(|err| ValidationError::Exact(err.to_string()))
+    }
+
+    async fn get<T: for<'de> serde::Deserialize<'de>>(
+        &self,
+        path: &str,
+    ) -> Result<T, ValidationError> {
+        let url = self.url(path)?;
+        let response = self.client.get(url).send().await.map_err(|err| {
+            ValidationError::Exact(format!("failed to GET debit facilitator: {err}"))
+        })?;
+        Self::parse_response(response).await
+    }
+}
+
+#[async_trait]
+impl ExactService for HttpExactService {
+    async fn verify(&self, request: &VerifyRequest) -> Result<VerifyResponse, ValidationError> {
+        self.post("verify", request).await
+    }
+
+    async fn settle(&self, request: &SettleRequest) -> Result<SettleResponse, ValidationError> {
+        self.post("settle", request).await
+    }
+
+    async fn supported(&self) -> Result<Vec<SupportedKind>, ValidationError> {
+        let response: SupportedPaymentKindsResponse = self.get("supported").await.map_err(|err| {
+            ValidationError::Exact(format!(
+                "failed to fetch supported from {}: {err}",
+                self.base_url
+            ))
+        })?;
+        convert_supported(response)
     }
 }

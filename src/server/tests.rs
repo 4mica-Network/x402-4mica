@@ -22,8 +22,8 @@ use super::{
     handlers::build_router,
     state::{
         AppState, CreateTabRequest, CreateTabResponse, ExactService, FourMicaHandler,
-        PaymentRequirements, SettleRequest, SettleResponse, SharedState, TabError, TabService,
-        ValidationError, VerifyRequest, VerifyResponse,
+        PaymentRequirements, SettleRequest, SettleResponse, SharedState, SupportedKind, TabError,
+        TabService, ValidationError, VerifyRequest, VerifyResponse,
     },
 };
 
@@ -581,8 +581,13 @@ impl ExactService for MockExact {
         ))
     }
 
-    async fn supported(&self) -> Result<Vec<(String, String)>, ValidationError> {
-        Ok(vec![("exact".into(), "base".into())])
+    async fn supported(&self) -> Result<Vec<SupportedKind>, ValidationError> {
+        Ok(vec![SupportedKind {
+            scheme: "exact".into(),
+            network: "base".into(),
+            x402_version: Some(1),
+            extra: None,
+        }])
     }
 }
 

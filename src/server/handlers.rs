@@ -10,12 +10,13 @@ use tower_http::trace::TraceLayer;
 use tracing::{info, warn};
 
 use super::state::{
-    CreateTabRequest, HealthResponse, SettleRequest, SettleResponse, SharedState,
+    CreateTabRequest, HealthResponse, SettleRequest, SettleResponse, SharedState, SupportedKind,
     SupportedResponse, TabError, VerifyRequest, VerifyResponse,
 };
 
 pub(super) fn build_router(state: SharedState) -> Router {
     Router::new()
+        .route("/", get(home_handler))
         .route("/supported", get(supported_handler))
         .route("/verify", post(verify_handler))
         .route("/settle", post(settle_handler))
@@ -28,6 +29,16 @@ pub(super) fn build_router(state: SharedState) -> Router {
 async fn supported_handler(State(state): State<SharedState>) -> impl IntoResponse {
     let kinds = state.supported().await;
     Json(SupportedResponse::new(kinds))
+}
+
+async fn home_handler(State(state): State<SharedState>) -> impl IntoResponse {
+    let supported = state.supported().await;
+    Json(HomeResponse {
+        message: "Welcome to the 4mica credit facilitator. Use /supported to discover payment schemes, /tabs to issue tabs, /verify to validate X-PAYMENT headers, and /settle to mint certificates or forward debit settlements.",
+        supported,
+        health: "/health",
+        docs: "See README.md for a full flow walkthrough.",
+    })
 }
 
 async fn health_handler() -> impl IntoResponse {
@@ -110,4 +121,12 @@ async fn create_tab_handler(
 #[derive(Serialize)]
 struct ErrorResponse {
     error: String,
+}
+
+#[derive(Serialize)]
+struct HomeResponse<'a> {
+    message: &'a str,
+    supported: Vec<SupportedKind>,
+    health: &'a str,
+    docs: &'a str,
 }
