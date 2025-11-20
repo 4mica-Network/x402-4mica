@@ -78,41 +78,81 @@ impl AppState {
     }
 
     pub async fn verify(&self, request: &VerifyRequest) -> Result<VerifyResponse, ValidationError> {
-        if let Some(handler) = self.handler_for(
-            &request.payment_requirements.scheme,
-            &request.payment_requirements.network,
-        ) {
+        let scheme = &request.payment_requirements.scheme;
+        let network = &request.payment_requirements.network;
+
+        if let Some(handler) = self.handler_for(scheme, network) {
             return handler
                 .verify(&request.payment_header, &request.payment_requirements)
                 .await;
         }
 
         if let Some(exact) = &self.exact {
-            return exact.verify(request).await;
+            match exact.supported().await {
+                Ok(kinds) => {
+                    let matches_scheme = kinds.iter().any(|kind| &kind.scheme == scheme);
+                    if kinds
+                        .iter()
+                        .any(|kind| &kind.scheme == scheme && &kind.network == network)
+                    {
+                        return exact.verify(request).await;
+                    }
+                    if matches_scheme {
+                        return Err(ValidationError::UnsupportedNetwork(network.clone()));
+                    }
+                }
+                Err(err) => tracing::warn!(reason = %err, "failed to fetch exact supported kinds"),
+            }
         }
 
-        Err(ValidationError::UnsupportedScheme(
-            request.payment_requirements.scheme.clone(),
-        ))
+        if self
+            .four_mica
+            .iter()
+            .any(|handler| &handler.scheme == scheme)
+        {
+            return Err(ValidationError::UnsupportedNetwork(network.clone()));
+        }
+
+        Err(ValidationError::UnsupportedScheme(scheme.clone()))
     }
 
     pub async fn settle(&self, request: &SettleRequest) -> Result<SettleResponse, ValidationError> {
-        if let Some(handler) = self.handler_for(
-            &request.payment_requirements.scheme,
-            &request.payment_requirements.network,
-        ) {
+        let scheme = &request.payment_requirements.scheme;
+        let network = &request.payment_requirements.network;
+
+        if let Some(handler) = self.handler_for(scheme, network) {
             return handler
                 .settle(&request.payment_header, &request.payment_requirements)
                 .await;
         }
 
         if let Some(exact) = &self.exact {
-            return exact.settle(request).await;
+            match exact.supported().await {
+                Ok(kinds) => {
+                    let matches_scheme = kinds.iter().any(|kind| &kind.scheme == scheme);
+                    if kinds
+                        .iter()
+                        .any(|kind| &kind.scheme == scheme && &kind.network == network)
+                    {
+                        return exact.settle(request).await;
+                    }
+                    if matches_scheme {
+                        return Err(ValidationError::UnsupportedNetwork(network.clone()));
+                    }
+                }
+                Err(err) => tracing::warn!(reason = %err, "failed to fetch exact supported kinds"),
+            }
         }
 
-        Err(ValidationError::UnsupportedScheme(
-            request.payment_requirements.scheme.clone(),
-        ))
+        if self
+            .four_mica
+            .iter()
+            .any(|handler| &handler.scheme == scheme)
+        {
+            return Err(ValidationError::UnsupportedNetwork(network.clone()));
+        }
+
+        Err(ValidationError::UnsupportedScheme(scheme.clone()))
     }
 
     pub async fn create_tab(

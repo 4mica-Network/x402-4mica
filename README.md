@@ -207,9 +207,14 @@ header with `rust-sdk-4mica` and call `/verify`:
 
 ```bash
 # uses FACILITATOR_URL (default http://localhost:8080/) and:
-# PAYER_KEY, USER_ADDRESS, RECIPIENT_ADDRESS, TAB_ID, AMOUNT, ASSET_ADDRESS
+# PAYER_KEY, USER_ADDRESS, RESOURCE_URL (auto fetches tab + paymentRequirements)
+# or: TAB_ID, AMOUNT, RECIPIENT_ADDRESS, ASSET_ADDRESS when RESOURCE_URL is unset
 cargo run --example facilitator_rust -- verify http://localhost:8080/
+
+# End-to-end demo: discover → tab → sign → /verify → resource retry → /settle
+cargo run --example facilitator_rust -- demo http://localhost:8080/
 ```
+The example will read environment variables from `examples/.env` (or a root `.env`) if present.
 
 To just view `/supported`, run:
 

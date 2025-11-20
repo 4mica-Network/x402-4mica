@@ -153,6 +153,8 @@ def _ensure_payment_tab(
         required=False,
         default=DEFAULT_FACILITATOR_URL,
     )
+    if "://" not in facilitator_url:
+        facilitator_url = f"http://{facilitator_url}"
     url = f"{facilitator_url.rstrip('/')}/tabs"
     payload = {
         "user_address": user_address,
@@ -228,11 +230,7 @@ def _build_payment_requirements(user_address: str) -> JsonDict:
         _config_value("ASSET_ADDRESS", required=False, default=DEFAULT_ASSET),
         field="ASSET_ADDRESS",
     )
-    tab_asset = _TAB_STATE.get("asset_address")
-    if tab_asset:
-        asset_address = _normalize_address(tab_asset, field="assetAddress")
-    else:
-        asset_address = configured_asset
+    asset_address = configured_asset
 
     max_amount_required = _as_hex_u256(
         _config_value("MAX_AMOUNT_WEI", required=False, default=DEFAULT_MAX_AMOUNT)
