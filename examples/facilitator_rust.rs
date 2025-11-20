@@ -1,4 +1,4 @@
-//! Minimal facilitator client using the local `rust-sdk-4mica` to sign payment envelopes.
+//! Lightweight facilitator demo that leans on `rust-sdk-4mica` to sign a payment envelope.
 //!
 //! Usage:
 //! - Show supported kinds:
@@ -22,32 +22,13 @@ use std::env;
 use std::io::ErrorKind;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, anyhow, bail};
+use anyhow::{Context, anyhow, bail, ensure};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use dotenvy::from_filename;
 use reqwest::{Client as HttpClient, Method, StatusCode, Url};
-use rust_sdk_4mica::{
-    Client, ConfigBuilder, PaymentGuaranteeRequestClaims, PaymentSignature, SigningScheme, U256,
-};
+use rust_sdk_4mica::{Client, ConfigBuilder, PaymentGuaranteeRequestClaims, SigningScheme, U256};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct PaymentPayload {
-    claims: PaymentGuaranteeRequestClaims,
-    signature: String,
-    signing_scheme: String,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct PaymentEnvelope {
-    x402_version: u8,
-    scheme: String,
-    network: String,
-    payload: PaymentPayload,
-}
 
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -71,17 +52,10 @@ struct SupportedKind {
     network: String,
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct VerifyRequest {
-    x402_version: u8,
-    payment_header: String,
-    payment_requirements: PaymentRequirements,
-}
-
-struct VerifyParts {
-    payment_header: String,
-    verify_body: VerifyRequest,
+struct PaymentSession {
+    header: String,
+    verify_body: Value,
+    requirements: PaymentRequirements,
     claims: PaymentGuaranteeRequestClaims,
 }
 
@@ -105,33 +79,18 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn show_supported(facilitator: &str) -> anyhow::Result<()> {
-    let client = HttpClient::new();
-    let url = format!("{facilitator}/supported");
-    let resp = client.get(&url).send().await?.error_for_status()?;
-    let body: Value = resp.json().await?;
-    println!("{}", serde_json::to_string_pretty(&body)?);
-    Ok(())
-}
-
 async fn run_verify(facilitator: &str) -> anyhow::Result<()> {
     let payer_key = env_var("PAYER_KEY")?;
     let user_address = env_var("USER_ADDRESS")?;
 
-    let requirements = resolve_payment_requirements(facilitator, &user_address).await?;
-    let VerifyParts {
-        payment_header,
-        verify_body,
-        claims,
-    } = build_verify_parts(&requirements, &payer_key, &user_address).await?;
+    let payment = PaymentSession::build(facilitator, &payer_key, &user_address).await?;
+    println!("X-PAYMENT header:\n{}\n", payment.header);
 
-    println!("X-PAYMENT header:\n{}\n", payment_header);
-
-    let client = HttpClient::new();
     let url = format!("{facilitator}/verify");
+    let client = HttpClient::new();
     let resp = client
         .post(&url)
-        .json(&verify_body)
+        .json(&payment.verify_body)
         .send()
         .await?
         .error_for_status()?;
@@ -140,7 +99,7 @@ async fn run_verify(facilitator: &str) -> anyhow::Result<()> {
 
     println!(
         "Signed claims:\n{}",
-        serde_json::to_string_pretty(&json!(claims))?
+        serde_json::to_string_pretty(&json!(payment.claims))?
     );
 
     Ok(())
@@ -149,24 +108,14 @@ async fn run_verify(facilitator: &str) -> anyhow::Result<()> {
 async fn run_demo(facilitator: &str) -> anyhow::Result<()> {
     let payer_key = env_var("PAYER_KEY")?;
     let user_address = env_var("USER_ADDRESS")?;
-
     let resource_url = env_var("RESOURCE_URL")
         .context("RESOURCE_URL is required for demo flow (paid resource endpoint)")?;
     let resource_method = env_var_opt("RESOURCE_METHOD").unwrap_or_else(|| "GET".into());
-    println!("Resource discovery at {resource_url}");
-    let mut requirements =
-        fetch_requirements_from_resource(&resource_url, &resource_method, &user_address).await?;
-    requirements = align_with_supported(facilitator, requirements).await?;
 
-    let VerifyParts {
-        payment_header,
-        verify_body,
-        claims,
-    } = build_verify_parts(&requirements, &payer_key, &user_address).await?;
-
+    let payment = PaymentSession::build(facilitator, &payer_key, &user_address).await?;
     println!(
         "Resolved paymentRequirements:\n{}\n",
-        serde_json::to_string_pretty(&json!(verify_body.payment_requirements))?
+        serde_json::to_string_pretty(&json!(payment.requirements))?
     );
 
     let client = HttpClient::new();
@@ -174,7 +123,7 @@ async fn run_demo(facilitator: &str) -> anyhow::Result<()> {
     let url = format!("{facilitator}/verify");
     let verify_resp = client
         .post(&url)
-        .json(&verify_body)
+        .json(&payment.verify_body)
         .send()
         .await?
         .error_for_status()?;
@@ -187,8 +136,8 @@ async fn run_demo(facilitator: &str) -> anyhow::Result<()> {
     // Retry resource with header
     println!("Retrying resource with X-PAYMENT header");
     let retry = client
-        .get(&resource_url)
-        .header("X-PAYMENT", &payment_header)
+        .request(parse_method(&resource_method)?, &resource_url)
+        .header("X-PAYMENT", &payment.header)
         .send()
         .await
         .context("failed to retry resource with X-PAYMENT")?;
@@ -203,7 +152,7 @@ async fn run_demo(facilitator: &str) -> anyhow::Result<()> {
     let settle_url = format!("{facilitator}/settle");
     let settle_resp = client
         .post(&settle_url)
-        .json(&verify_body)
+        .json(&payment.verify_body)
         .send()
         .await?
         .error_for_status()?;
@@ -215,67 +164,85 @@ async fn run_demo(facilitator: &str) -> anyhow::Result<()> {
 
     println!(
         "Signed claims:\n{}",
-        serde_json::to_string_pretty(&json!(claims))?
+        serde_json::to_string_pretty(&json!(payment.claims))?
     );
     println!(
         "Demo complete for scheme={}, network={}",
-        requirements.scheme, requirements.network
+        payment.requirements.scheme, payment.requirements.network
     );
 
     Ok(())
 }
 
-fn parse_u256(value: &str) -> anyhow::Result<U256> {
-    let trimmed = value.trim();
-    if let Some(rest) = trimmed.strip_prefix("0x") {
-        U256::from_str_radix(rest, 16).map_err(Into::into)
-    } else {
-        U256::from_str_radix(trimmed, 10).map_err(Into::into)
+impl PaymentSession {
+    async fn build(
+        facilitator: &str,
+        payer_key: &str,
+        user_address: &str,
+    ) -> anyhow::Result<Self> {
+        let requirements = load_requirements(facilitator, user_address).await?;
+        let claims = claims_from_requirements(&requirements, user_address)?;
+        let signature = sign_claims(&claims, payer_key).await?;
+
+        let envelope = json!({
+            "x402Version": 1,
+            "scheme": requirements.scheme,
+            "network": requirements.network,
+            "payload": {
+                "claims": claims,
+                "signature": signature.signature,
+                "signingScheme": "eip712"
+            }
+        });
+        let header = BASE64_STANDARD.encode(serde_json::to_vec(&envelope)?);
+        let verify_body = json!({
+            "x402Version": 1,
+            "paymentHeader": header,
+            "paymentRequirements": requirements,
+        });
+
+        Ok(Self {
+            header,
+            verify_body,
+            requirements,
+            claims,
+        })
     }
 }
 
-fn now_ts() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or_default()
+async fn show_supported(facilitator: &str) -> anyhow::Result<()> {
+    let client = HttpClient::new();
+    let url = format!("{facilitator}/supported");
+    let resp = client.get(&url).send().await?.error_for_status()?;
+    let body: Value = resp.json().await?;
+    println!("{}", serde_json::to_string_pretty(&body)?);
+    Ok(())
 }
 
-fn env_var(key: &str) -> anyhow::Result<String> {
-    env::var(key).with_context(|| format!("missing env {key}"))
-}
-
-fn env_var_opt(key: &str) -> Option<String> {
-    env::var(key).ok()
-}
-
-async fn resolve_payment_requirements(
+async fn load_requirements(
     facilitator: &str,
     user_address: &str,
 ) -> anyhow::Result<PaymentRequirements> {
-    if let Some(resource_url) = env_var_opt("RESOURCE_URL") {
+    let requirements = if let Some(resource_url) = env_var_opt("RESOURCE_URL") {
         let method = env_var_opt("RESOURCE_METHOD").unwrap_or_else(|| "GET".into());
         println!("Fetching paymentRequirements from resource at {resource_url}");
-        let requirements =
-            fetch_requirements_from_resource(&resource_url, &method, user_address).await?;
-        return align_with_supported(facilitator, requirements).await;
-    }
+        fetch_requirements_from_resource(&resource_url, &method, user_address).await?
+    } else {
+        manual_requirements_from_env(user_address)?
+    };
 
-    let tab_id = env_var("TAB_ID")?;
-    let amount_raw = env_var("AMOUNT")?;
-    let requirements = build_requirements_from_env(user_address, tab_id, amount_raw)?;
     align_with_supported(facilitator, requirements).await
 }
 
-fn build_requirements_from_env(
+fn manual_requirements_from_env(
     user_address: &str,
-    tab_id_raw: String,
-    amount_raw: String,
 ) -> anyhow::Result<PaymentRequirements> {
     let scheme = env::var("X402_SCHEME").unwrap_or_else(|_| "4mica-credit".into());
     let network = env::var("X402_NETWORK").unwrap_or_else(|_| "polygon-amoy".into());
     let pay_to = env_var("RECIPIENT_ADDRESS")?;
     let asset = env_var("ASSET_ADDRESS")?;
+    let tab_id_raw = env_var("TAB_ID")?;
+    let amount_raw = env_var("AMOUNT")?;
     let amount = parse_u256(&amount_raw)?;
     let resource = env_var_opt("PAYMENT_RESOURCE");
     let description = env_var_opt("PAYMENT_DESCRIPTION");
@@ -308,22 +275,18 @@ async fn fetch_requirements_from_resource(
     user_address: &str,
 ) -> anyhow::Result<PaymentRequirements> {
     let client = HttpClient::new();
-    let method = method
-        .parse::<Method>()
-        .or_else(|_| method.to_uppercase().parse::<Method>())
-        .context("invalid RESOURCE_METHOD")?;
+    let method = parse_method(method)?;
     let response = client
         .request(method, resource_url)
         .send()
         .await
         .context("failed to contact resource server")?;
 
-    if response.status() != StatusCode::PAYMENT_REQUIRED {
-        bail!(
-            "expected 402 Payment Required from resource, got {}",
-            response.status()
-        );
-    }
+    ensure!(
+        response.status() == StatusCode::PAYMENT_REQUIRED,
+        "expected 402 Payment Required from resource, got {}",
+        response.status()
+    );
 
     let base_url: Url = response.url().clone();
     let payload: Value = response
@@ -397,12 +360,6 @@ async fn align_with_supported(
         .iter()
         .find(|k| k.scheme.to_lowercase() == scheme_lower)
     {
-        if req.network != kind.network {
-            println!(
-                "Aligning network with facilitator: {} -> {}",
-                req.network, kind.network
-            );
-        }
         req.scheme = kind.scheme.clone();
         req.network = kind.network.clone();
         return Ok(req);
@@ -412,20 +369,12 @@ async fn align_with_supported(
         .iter()
         .find(|k| k.scheme.to_lowercase().contains("4mica"))
     {
-        println!(
-            "Using facilitator 4mica scheme/network: {} / {}",
-            kind.scheme, kind.network
-        );
         req.scheme = kind.scheme.clone();
         req.network = kind.network.clone();
         return Ok(req);
     }
 
     if let Some(first) = supported.first() {
-        println!(
-            "No matching scheme; falling back to facilitator scheme/network: {} / {}",
-            first.scheme, first.network
-        );
         req.scheme = first.scheme.clone();
         req.network = first.network.clone();
     }
@@ -433,19 +382,28 @@ async fn align_with_supported(
     Ok(req)
 }
 
-async fn build_verify_parts(
+fn claims_from_requirements(
     requirements: &PaymentRequirements,
-    payer_key: &str,
     user_address: &str,
-) -> anyhow::Result<VerifyParts> {
-    let scheme = requirements.scheme.clone();
-    let network = requirements.network.clone();
-    let pay_to = requirements.pay_to.clone();
-    let asset = requirements.asset.clone();
+) -> anyhow::Result<PaymentGuaranteeRequestClaims> {
     let tab_id = extract_u256(&requirements.extra, &["tabId", "tab_id"], "tabId")?;
     let amount = parse_u256(&requirements.max_amount_required)?;
     validate_user_matches(requirements, user_address)?;
 
+    Ok(PaymentGuaranteeRequestClaims::new(
+        user_address.to_string(),
+        requirements.pay_to.clone(),
+        tab_id,
+        amount,
+        now_ts(),
+        Some(requirements.asset.clone()),
+    ))
+}
+
+async fn sign_claims(
+    claims: &PaymentGuaranteeRequestClaims,
+    payer_key: &str,
+) -> anyhow::Result<rust_sdk_4mica::PaymentSignature> {
     let core_api =
         env::var("X402_CORE_API_URL").unwrap_or_else(|_| "https://api.4mica.xyz/".into());
     let cfg = ConfigBuilder::default()
@@ -457,46 +415,42 @@ async fn build_verify_parts(
         .await
         .context("failed to init SDK client")?;
 
-    let claims = PaymentGuaranteeRequestClaims {
-        user_address: user_address.to_string(),
-        recipient_address: pay_to.clone(),
-        tab_id,
-        amount,
-        asset_address: asset.clone(),
-        timestamp: now_ts(),
-    };
-
-    let signature: PaymentSignature = client
+    client
         .user
         .sign_payment(claims.clone(), SigningScheme::Eip712)
         .await
-        .context("failed to sign claims")?;
+        .context("failed to sign claims")
+}
 
-    let envelope = PaymentEnvelope {
-        x402_version: 1,
-        scheme,
-        network,
-        payload: PaymentPayload {
-            claims: claims.clone(),
-            signature: signature.signature.clone(),
-            signing_scheme: "eip712".into(),
-        },
-    };
+fn parse_u256(value: &str) -> anyhow::Result<U256> {
+    let trimmed = value.trim();
+    if let Some(rest) = trimmed.strip_prefix("0x") {
+        U256::from_str_radix(rest, 16).map_err(Into::into)
+    } else {
+        U256::from_str_radix(trimmed, 10).map_err(Into::into)
+    }
+}
 
-    let raw = serde_json::to_vec(&envelope)?;
-    let payment_header = BASE64_STANDARD.encode(raw);
+fn parse_method(method: &str) -> anyhow::Result<Method> {
+    method
+        .parse::<Method>()
+        .or_else(|_| method.to_uppercase().parse::<Method>())
+        .context("invalid HTTP method")
+}
 
-    let verify_body = VerifyRequest {
-        x402_version: 1,
-        payment_header: payment_header.clone(),
-        payment_requirements: requirements.clone(),
-    };
+fn now_ts() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or_default()
+}
 
-    Ok(VerifyParts {
-        payment_header,
-        verify_body,
-        claims,
-    })
+fn env_var(key: &str) -> anyhow::Result<String> {
+    env::var(key).with_context(|| format!("missing env {key}"))
+}
+
+fn env_var_opt(key: &str) -> Option<String> {
+    env::var(key).ok()
 }
 
 fn load_env_files() {
