@@ -9,8 +9,8 @@ use x402_rs::facilitator_local::FacilitatorLocal;
 use x402_rs::provider_cache::{ProviderCache, ProviderMap};
 use x402_rs::types::{
     Base64Bytes, PaymentPayload, PaymentRequirements as XPaymentRequirements,
-    SettleRequest as XSettleRequest, SettleResponse as XSettleResponse,
-    SupportedPaymentKind, SupportedPaymentKindsResponse, VerifyRequest as XVerifyRequest,
+    SettleRequest as XSettleRequest, SettleResponse as XSettleResponse, SupportedPaymentKind,
+    SupportedPaymentKindsResponse, VerifyRequest as XVerifyRequest,
     VerifyResponse as XVerifyResponse, X402Version,
 };
 
@@ -21,14 +21,11 @@ use crate::server::state::{
 
 const ENV_DEBIT_URL: &str = "X402_DEBIT_URL";
 
-fn convert_supported_kind(
-    kind: SupportedPaymentKind,
-) -> Result<SupportedKind, ValidationError> {
+fn convert_supported_kind(kind: SupportedPaymentKind) -> Result<SupportedKind, ValidationError> {
     let extra = kind
         .extra
         .map(|value| {
-            serde_json::to_value(value)
-                .map_err(|err| ValidationError::Exact(err.to_string()))
+            serde_json::to_value(value).map_err(|err| ValidationError::Exact(err.to_string()))
         })
         .transpose()?;
     let x402_version = match kind.x402_version {
@@ -43,14 +40,15 @@ fn convert_supported_kind(
     })
 }
 
-fn convert_supported(response: SupportedPaymentKindsResponse) -> Result<Vec<SupportedKind>, ValidationError> {
+fn convert_supported(
+    response: SupportedPaymentKindsResponse,
+) -> Result<Vec<SupportedKind>, ValidationError> {
     response
         .kinds
         .into_iter()
         .map(convert_supported_kind)
         .collect()
 }
-
 
 pub async fn try_from_env() -> anyhow::Result<Option<Arc<dyn ExactService>>> {
     if let Some(remote) = HttpExactService::from_env()? {
@@ -316,12 +314,13 @@ impl ExactService for HttpExactService {
     }
 
     async fn supported(&self) -> Result<Vec<SupportedKind>, ValidationError> {
-        let response: SupportedPaymentKindsResponse = self.get("supported").await.map_err(|err| {
-            ValidationError::Exact(format!(
-                "failed to fetch supported from {}: {err}",
-                self.base_url
-            ))
-        })?;
+        let response: SupportedPaymentKindsResponse =
+            self.get("supported").await.map_err(|err| {
+                ValidationError::Exact(format!(
+                    "failed to fetch supported from {}: {err}",
+                    self.base_url
+                ))
+            })?;
         convert_supported(response)
     }
 }

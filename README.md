@@ -200,14 +200,24 @@ cargo run
 The bound address is logged on start-up. Use `GET /supported` to read the `(scheme, network)` pair
 that resource servers should use inside their `402 Payment Required` responses.
 
-## Python client example
+## Rust client example
 
-`examples/x402_facilitator_client.py` walks through the client responsibilities:
+If you have the local SDK at `~/4mica-core/sdk`, the bundled Rust example shows how to sign a payment
+header with `rust-sdk-4mica` and call `/verify`:
 
-- `discover` — call a paywalled resource, capture the `paymentRequirements`, and show what needs to
-  be signed.
-- `verify` / `settle` — send the base64 `paymentHeader` and requirements to the facilitator once the
-  client has signed the claims with their private key.
+```bash
+# uses FACILITATOR_URL (default http://localhost:8080/) and:
+# PAYER_KEY, USER_ADDRESS, RECIPIENT_ADDRESS, TAB_ID, AMOUNT, ASSET_ADDRESS
+cargo run --example facilitator_rust -- verify http://localhost:8080/
+```
+
+To just view `/supported`, run:
+
+```bash
+cargo run --example facilitator_rust -- supported http://localhost:8080/
+```
+
+The mock paid API (`examples/mock_paid_api.py`) remains available for quick end-to-end smoke tests.
 - `auto` — end-to-end helper that signs the guarantee locally, replays the resource request with the
   generated `X-PAYMENT` header, and optionally submits `/verify`/`/settle` for diagnostics.
 - `supported`, `health` — quick facilitator diagnostics.
