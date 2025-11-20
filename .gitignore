@@ -2,13 +2,10 @@
 # Rust
 # ------------------------
 # Cargo build output
-/target/
+target/
 
 # Backup files created by rustfmt or editors
 **/*.rs.bk
-
-# Rust toolchains
-rust-toolchain
 
 # Cargo.lock (optional for libraries)
 # Uncomment if you're building a library, not an application
@@ -65,18 +62,22 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 cover/
+.ruff_cache/
 
 # Jupyter Notebook
 .ipynb_checkpoints
 
 # Environments
 .env
+.env.local
+.env.*.local
 .venv
 env/
 venv/
 ENV/
 env.bak/
 venv.bak/
+.python-version
 
 # IDEs and editors
 .vscode/
