@@ -4,7 +4,7 @@ Quick-start references for the facilitator examples shipped with this repository
 
 ## Rust facilitator client (`facilitator_rust.rs`)
 
-This example shows how to use `rust-sdk-4mica`'s `FacilitatorFlow` to run the full x402 lifecycle against a paid resource: follow the 402, request a tab, sign the guarantee, and settle through the facilitator with a single call.
+This example shows how to use `rust-sdk-4mica`'s `FacilitatorFlow` to run the full x402 lifecycle against a paid resource: follow the 402 (reading its `accepted` list of paymentRequirements), request a tab when instructed, sign the guarantee, and settle through the facilitator with a single call.
 
 Environment variables (loaded from `examples/.env` and then `.env`):
 
@@ -14,6 +14,7 @@ USER_ADDRESS=0x...        # payer's address to place in the guarantee claims
 RESOURCE_URL=http://localhost:9000/protected
 RESOURCE_METHOD=GET       # optional, defaults to GET
 FACILITATOR_URL=http://localhost:8080/  # optional, defaults to localhost
+ASSET_ADDRESS=0x...       # asset used for tab funding and guarantees
 ```
 
 Run it from the repo root:
@@ -24,13 +25,13 @@ cargo run --example facilitator_rust
 
 What it prints:
 - `X-PAYMENT` header you can attach to the protected request: `X-PAYMENT: <header>`
-- JSON body ready to send to `${FACILITATOR_URL}/verify` (already POSTed to `/settle` for you)
+- The resolved asset, tab id, and JSON body ready to send to `${FACILITATOR_URL}/verify` (already POSTed to `/settle` for you)
 - Settlement response from `${FACILITATOR_URL}/settle`
 
 Recommended flow:
 1) Start the facilitator (`cargo run`) pointed at your 4mica core API.
 2) (Optional) Start the mock paid API below on port 9000.
-3) Run the Rust example to generate the header, `/verify` body, and trigger settlement for the target resource.
+3) Run the Rust example to generate the header, `/verify` body, and trigger settlement for the target resource. The SDK uses the `accepted` list emitted in the 402 response (if present) before falling back to the facilitator `/supported` list.
 
 ## Mock paid API (`mock_paid_api.py`)
 

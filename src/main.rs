@@ -57,7 +57,10 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let tab_service: Option<Arc<dyn TabService>> = service_cfg.networks.first().map(|network| {
-        Arc::new(CoreTabService::new(network.core_api_base_url.clone())) as Arc<dyn TabService>
+        Arc::new(CoreTabService::new(
+            network.core_api_base_url.clone(),
+            service_cfg.asset_address.clone(),
+        )) as Arc<dyn TabService>
     });
 
     let exact_service: Option<Arc<dyn ExactService>> = build_exact_service().await?;

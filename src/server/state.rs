@@ -19,7 +19,6 @@ use crate::issuer::{GuaranteeIssuer, parse_error_message};
 use crate::verifier::CertificateValidator;
 
 const SUPPORTED_VERSION: u8 = 1;
-const ETH_SENTINEL_ADDRESS: &str = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
 
 pub(super) type SharedState = Arc<AppState>;
 
@@ -400,13 +399,15 @@ pub(crate) trait TabService: Send + Sync {
 pub(crate) struct CoreTabService {
     client: Client,
     base_url: Url,
+    default_asset_address: Option<String>,
 }
 
 impl CoreTabService {
-    pub fn new(base_url: Url) -> Self {
+    pub fn new(base_url: Url, default_asset_address: Option<String>) -> Self {
         Self {
             client: Client::new(),
             base_url,
+            default_asset_address,
         }
     }
 
@@ -476,27 +477,32 @@ impl CoreTabService {
 #[async_trait]
 impl TabService for CoreTabService {
     async fn create_tab(&self, request: &CreateTabRequest) -> Result<CreateTabResponse, TabError> {
+        let asset_address = self.resolve_asset_address(request)?;
         let payload = CoreCreateTabRequest {
             user_address: request.user_address.clone(),
             recipient_address: request.recipient_address.clone(),
-            erc20_token: request.erc20_token.clone(),
+            asset_address: asset_address.clone(),
+            erc20_token: Some(asset_address.clone()),
             ttl: request.ttl_seconds,
         };
 
         let result: CoreCreateTabResponse = self.post("core/payment-tabs", &payload).await?;
         let tab_id = canonical_u256(&result.id);
-        let fallback_asset = result
+        let asset_address = match result.asset_address.clone() {
+            Some(value) => value,
+            None => match self.fetch_tab_asset(&tab_id).await {
+                Ok(Some(asset)) => asset,
+                Ok(None) => asset_address.clone(),
+                Err(err) => {
+                    tracing::warn!(%err, "failed to fetch tab asset from core; falling back to configured/requested asset");
+                    asset_address.clone()
+                }
+            },
+        };
+        let erc20_token = result
             .erc20_token
             .clone()
-            .unwrap_or_else(|| ETH_SENTINEL_ADDRESS.to_string());
-        let asset_address = match self.fetch_tab_asset(&tab_id).await {
-            Ok(Some(asset)) => asset,
-            Ok(None) => fallback_asset.clone(),
-            Err(err) => {
-                tracing::warn!(%err, "failed to fetch tab asset from core; falling back to request erc20_token/ETH sentinel");
-                fallback_asset.clone()
-            }
-        };
+            .or_else(|| Some(asset_address.clone()));
         let start_timestamp = current_timestamp();
         let ttl_seconds = request
             .ttl_seconds
@@ -507,7 +513,8 @@ impl TabService for CoreTabService {
             tab_id,
             user_address: request.user_address.clone(),
             recipient_address: request.recipient_address.clone(),
-            asset_address,
+            asset_address: asset_address.clone(),
+            erc20_token,
             start_timestamp,
             ttl_seconds,
         })
@@ -515,6 +522,23 @@ impl TabService for CoreTabService {
 }
 
 impl CoreTabService {
+    fn resolve_asset_address(&self, request: &CreateTabRequest) -> Result<String, TabError> {
+        let value = request
+            .asset_address
+            .as_deref()
+            .or(request.erc20_token.as_deref())
+            .or(self.default_asset_address.as_deref())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                TabError::Invalid(
+                    "assetAddress is required (supply it in the request or ASSET_ADDRESS env)"
+                        .into(),
+                )
+            })?;
+        Ok(value.to_string())
+    }
+
     async fn fetch_tab_asset(&self, tab_id: &str) -> Result<Option<String>, TabError> {
         let path = format!("core/payment-tabs/{tab_id}");
         let tab: Option<CoreTabInfo> = self.get(&path).await?;
@@ -590,6 +614,9 @@ pub struct CreateTabRequest {
     pub user_address: String,
     #[serde(alias = "recipientAddress")]
     pub recipient_address: String,
+    #[serde(alias = "assetAddress")]
+    #[serde(default)]
+    pub asset_address: Option<String>,
     #[serde(alias = "erc20Token")]
     #[serde(default)]
     pub erc20_token: Option<String>,
@@ -605,6 +632,8 @@ pub struct CreateTabResponse {
     pub user_address: String,
     pub recipient_address: String,
     pub asset_address: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub erc20_token: Option<String>,
     pub start_timestamp: i64,
     pub ttl_seconds: i64,
 }
@@ -822,6 +851,7 @@ pub enum TabError {
 struct CoreCreateTabRequest {
     user_address: String,
     recipient_address: String,
+    asset_address: String,
     erc20_token: Option<String>,
     ttl: Option<u64>,
 }
@@ -829,6 +859,9 @@ struct CoreCreateTabRequest {
 #[derive(Debug, Deserialize)]
 struct CoreCreateTabResponse {
     id: U256,
+    #[serde(default)]
+    #[serde(alias = "asset_address", alias = "assetAddress")]
+    asset_address: Option<String>,
     #[serde(default)]
     erc20_token: Option<String>,
 }

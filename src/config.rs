@@ -11,6 +11,7 @@ const ENV_NETWORKS: &str = "X402_NETWORKS";
 const ENV_CORE_API_URL: &str = "X402_CORE_API_URL";
 const ENV_HOST: &str = "HOST";
 const ENV_PORT: &str = "PORT";
+const ENV_ASSET_ADDRESS: &str = "ASSET_ADDRESS";
 const ENV_GUARANTEE_DOMAIN_VARIANTS: [&str; 3] = [
     "X402_GUARANTEE_DOMAIN",
     "FOUR_MICA_GUARANTEE_DOMAIN",
@@ -23,6 +24,7 @@ pub struct ServiceConfig {
     pub bind_addr: SocketAddr,
     pub scheme: String,
     pub networks: Vec<NetworkConfig>,
+    pub asset_address: Option<String>,
 }
 
 #[derive(Clone)]
@@ -36,10 +38,12 @@ impl ServiceConfig {
         let bind_addr = bind_addr_from_env()?;
         let scheme = std::env::var(ENV_SCHEME).unwrap_or_else(|_| "4mica-credit".into());
         let networks = load_networks_from_env()?;
+        let asset_address = optional_asset_address_from_env();
         Ok(Self {
             bind_addr,
             scheme,
             networks,
+            asset_address,
         })
     }
 }
@@ -148,6 +152,13 @@ fn normalize_url(input: &str) -> Result<Url> {
         url.set_path("/");
     }
     Ok(url)
+}
+
+fn optional_asset_address_from_env() -> Option<String> {
+    std::env::var(ENV_ASSET_ADDRESS)
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
 }
 
 async fn fetch_public_params(base: &Url) -> Result<CorePublicParameters> {

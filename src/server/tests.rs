@@ -216,6 +216,7 @@ async fn tabs_endpoint_returns_response_from_service() {
         user_address: "0xabc".into(),
         recipient_address: "0xdef".into(),
         asset_address: "0xeee".into(),
+        erc20_token: Some("0xeee".into()),
         start_timestamp: 123,
         ttl_seconds: 60,
     };
@@ -230,6 +231,7 @@ async fn tabs_endpoint_returns_response_from_service() {
     let request = CreateTabRequest {
         user_address: "0xabc".into(),
         recipient_address: "0xdef".into(),
+        asset_address: Some("0xeee".into()),
         erc20_token: None,
         ttl_seconds: Some(60),
     };
@@ -251,6 +253,7 @@ async fn tabs_endpoint_returns_not_implemented_when_disabled() {
     let request = CreateTabRequest {
         user_address: "0xabc".into(),
         recipient_address: "0xdef".into(),
+        asset_address: Some("0xeee".into()),
         erc20_token: None,
         ttl_seconds: None,
     };
@@ -284,6 +287,7 @@ async fn tabs_endpoint_propagates_upstream_errors() {
     let request = CreateTabRequest {
         user_address: "0xabc".into(),
         recipient_address: "0xdef".into(),
+        asset_address: Some("0xeee".into()),
         erc20_token: None,
         ttl_seconds: Some(60),
     };

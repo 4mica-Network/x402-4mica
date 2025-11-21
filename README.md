@@ -165,6 +165,8 @@ export X402_NETWORK=sepolia-testnet
 
 # 4mica public API – used to fetch operator parameters
 export X402_CORE_API_URL=https://api.4mica.xyz/
+# Default asset address to apply when callers omit assetAddress in /tabs requests
+export ASSET_ADDRESS=0x...
 
 # Optional: pin the expected domain separator (32-byte hex, 0x-prefixed)
 export X402_GUARANTEE_DOMAIN=0x...

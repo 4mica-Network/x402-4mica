@@ -136,6 +136,7 @@ def _ensure_payment_tab(
     user_address: str,
     recipient_address: str,
     ttl_seconds: Optional[int],
+    asset_address: str,
     erc20_token: Optional[str],
 ) -> Dict[str, Any]:
     existing = _TAB_STATE.get(user_address)
@@ -159,7 +160,8 @@ def _ensure_payment_tab(
     payload = {
         "user_address": user_address,
         "recipient_address": recipient_address,
-        "erc20_token": erc20_token,
+        "asset_address": asset_address,
+        "erc20_token": erc20_token or asset_address,
         "ttl_seconds": ttl_seconds,
     }
 
@@ -248,8 +250,11 @@ def _build_payment_requirements(user_address: str) -> JsonDict:
     erc20_token = _config_value("ERC20_TOKEN", required=False)
     if erc20_token:
         erc20_token = _normalize_address(erc20_token, field="ERC20_TOKEN")
+    tab_token = erc20_token or configured_asset
 
-    tab_data = _ensure_payment_tab(user_address, recipient_address, ttl_seconds, erc20_token)
+    tab_data = _ensure_payment_tab(
+        user_address, recipient_address, ttl_seconds, configured_asset, tab_token
+    )
     tab_id = tab_data["tab_id"]
     start_ts = tab_data.get("start_timestamp", int(time.time()))
     tab_asset = tab_data.get("asset_address")
