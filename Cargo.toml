@@ -31,3 +31,5 @@ x402-rs = "0.9.3"
 
 [dev-dependencies]
 tower = { version = "0.5.2", features = ["util"] }
+serial_test = "3.2"
+crypto_4mica = { package = "crypto-4mica", version = "0.3.1" }

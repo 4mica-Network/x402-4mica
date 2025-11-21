@@ -181,3 +181,72 @@ fn parse_hex_array<const N: usize>(value: &str) -> Result<[u8; N]> {
     bytes.copy_from_slice(&decoded);
     Ok(bytes)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serial_test::serial;
+    use std::env;
+
+    fn clear_network_env() {
+        unsafe {
+            env::remove_var(ENV_NETWORKS);
+            env::remove_var(ENV_NETWORK);
+            env::remove_var(ENV_CORE_API_URL);
+            env::remove_var(ENV_GUARANTEE_DOMAIN_VARIANTS[0]);
+            env::remove_var(ENV_GUARANTEE_DOMAIN_VARIANTS[1]);
+            env::remove_var(ENV_GUARANTEE_DOMAIN_VARIANTS[2]);
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn parses_networks_from_json_env() {
+        clear_network_env();
+        unsafe {
+            env::set_var(
+                ENV_NETWORKS,
+                r#"[{"network":"alpha","coreApiUrl":"http://localhost:1234"}]"#,
+            );
+        }
+
+        let networks = load_networks_from_env().expect("networks parsed");
+        assert_eq!(networks.len(), 1);
+        assert_eq!(networks[0].id, "alpha");
+        assert_eq!(
+            networks[0].core_api_base_url.as_str(),
+            "http://localhost:1234/"
+        );
+
+        clear_network_env();
+    }
+
+    #[test]
+    #[serial]
+    fn falls_back_to_single_network_env() {
+        clear_network_env();
+        unsafe {
+            env::set_var(ENV_NETWORK, "beta");
+            env::set_var(ENV_CORE_API_URL, "http://example.com");
+        }
+
+        let networks = load_networks_from_env().expect("networks parsed");
+        assert_eq!(networks.len(), 1);
+        assert_eq!(networks[0].id, "beta");
+        assert_eq!(
+            networks[0].core_api_base_url.as_str(),
+            "http://example.com/"
+        );
+
+        clear_network_env();
+    }
+
+    #[test]
+    fn parse_hex_array_rejects_wrong_length() {
+        let err = parse_hex_array::<4>("0x01").unwrap_err();
+        assert!(
+            err.to_string().contains("expected 4 bytes"),
+            "unexpected error: {err}"
+        );
+    }
+}

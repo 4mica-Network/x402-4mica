@@ -524,17 +524,13 @@ impl TabService for CoreTabService {
 impl CoreTabService {
     fn resolve_asset_address(&self, request: &CreateTabRequest) -> Result<String, TabError> {
         let value = request
-            .asset_address
+            .erc20_token
             .as_deref()
-            .or(request.erc20_token.as_deref())
             .or(self.default_asset_address.as_deref())
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .ok_or_else(|| {
-                TabError::Invalid(
-                    "assetAddress is required (supply it in the request or ASSET_ADDRESS env)"
-                        .into(),
-                )
+                TabError::Invalid("erc20Token is required (or set ASSET_ADDRESS env)".into())
             })?;
         Ok(value.to_string())
     }
@@ -614,10 +610,7 @@ pub struct CreateTabRequest {
     pub user_address: String,
     #[serde(alias = "recipientAddress")]
     pub recipient_address: String,
-    #[serde(alias = "assetAddress")]
-    #[serde(default)]
-    pub asset_address: Option<String>,
-    #[serde(alias = "erc20Token")]
+    #[serde(alias = "erc20Token", alias = "assetAddress")]
     #[serde(default)]
     pub erc20_token: Option<String>,
     #[serde(alias = "ttlSeconds")]

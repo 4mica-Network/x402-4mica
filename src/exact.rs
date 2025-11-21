@@ -322,3 +322,60 @@ impl ExactService for HttpExactService {
         convert_supported(response)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serial_test::serial;
+    use std::env;
+
+    #[allow(dead_code)]
+    fn sample_verify_request() -> VerifyRequest {
+        VerifyRequest {
+            x402_version: 1,
+            payment_header: "header".into(),
+            payment_requirements: PaymentRequirements {
+                scheme: "exact".into(),
+                network: "base".into(),
+                max_amount_required: "1000".into(),
+                resource: None,
+                description: None,
+                mime_type: None,
+                output_schema: None,
+                pay_to: "0x0000000000000000000000000000000000000008".into(),
+                max_timeout_seconds: Some(30),
+                asset: "0x0000000000000000000000000000000000000009".into(),
+                extra: None,
+            },
+        }
+    }
+
+    #[allow(dead_code)]
+    fn sample_settle_request() -> SettleRequest {
+        SettleRequest {
+            x402_version: 1,
+            payment_header: "header".into(),
+            payment_requirements: sample_verify_request().payment_requirements,
+        }
+    }
+
+    fn set_debit_url(url: &str) {
+        unsafe { env::set_var(ENV_DEBIT_URL, url) };
+    }
+
+    fn clear_debit_url() {
+        unsafe { env::remove_var(ENV_DEBIT_URL) };
+    }
+
+    #[test]
+    #[serial]
+    fn parses_debit_url_from_env() {
+        set_debit_url("http://example.com");
+        let service = HttpExactService::from_env()
+            .expect("from_env")
+            .expect("present");
+        let url = service.url("verify").expect("url");
+        assert_eq!(url.as_str(), "http://example.com/verify");
+        clear_debit_url();
+    }
+}

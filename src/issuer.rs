@@ -112,3 +112,32 @@ pub(crate) fn parse_error_message(bytes: &[u8]) -> String {
         _ => "unknown error".to_string(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rust_sdk_4mica::U256;
+
+    fn sample_claims() -> PaymentGuaranteeRequestClaims {
+        PaymentGuaranteeRequestClaims {
+            user_address: "0x1".into(),
+            recipient_address: "0x2".into(),
+            tab_id: U256::from(1u8),
+            amount: U256::from(2u8),
+            asset_address: "0x3".into(),
+            timestamp: 123,
+        }
+    }
+
+    #[test]
+    fn build_request_body_injects_version_and_scheme() {
+        let issuer = LiveGuaranteeIssuer::try_new(Url::parse("http://example.com").unwrap())
+            .expect("issuer");
+        let body = issuer
+            .build_request_body(&sample_claims(), "0xdeadbeef", SigningScheme::Eip191)
+            .expect("body");
+        let version = body.get("claims").unwrap().get("version").unwrap();
+        assert_eq!(version, "v1");
+        assert_eq!(body.get("scheme").unwrap(), "eip191");
+    }
+}

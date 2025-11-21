@@ -45,7 +45,9 @@ async fn main() -> Result<()> {
     println!("--- x402 / 4mica flow ---");
     println!("1) Discover 402 + accepted requirements from the resource");
     println!("2) Request tab (if required) and sign claims locally");
-    println!("3) Retry the resource with X-PAYMENT using the header below (server will handle verify/settle)\n");
+    println!(
+        "3) Retry the resource with X-PAYMENT using the header below (server will handle verify/settle)\n"
+    );
 
     let config = ConfigBuilder::default()
         .wallet_private_key(payer_key)
@@ -92,10 +94,7 @@ async fn main() -> Result<()> {
 
     let payment_asset = &prepared.requirements.asset;
     println!("Payment asset address: {payment_asset}");
-    println!(
-        "Payment tabId: {}",
-        prepared.requirements.extra["tabId"]
-    );
+    println!("Payment tabId: {}", prepared.requirements.extra["tabId"]);
 
     // Sanity checks against the desired USDC flow.
     if !payment_asset.eq_ignore_ascii_case(&asset_address) {
