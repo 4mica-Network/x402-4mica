@@ -1,41 +1,10 @@
 # x402-4mica Examples
 
-Quick-start references for the facilitator examples shipped with this repository.
+Quick-start references that follow the standard x402 flow (as in `~/x402`): the client only talks to the resource server, while the server calls the facilitator for `/tabs`, `/verify`, and `/settle`. Users never interact with the facilitator or 4mica Core directly.
 
-## Rust facilitator client (`facilitator_rust.rs`)
+## Server-driven mock paid API (`mock_paid_api.py`)
 
-This example shows how to use `rust-sdk-4mica`'s `FacilitatorFlow` to run the full x402 lifecycle against a paid resource: follow the 402 (reading its `accepted` list of paymentRequirements), request a tab when instructed, sign the guarantee, and settle through the facilitator with a single call.
-
-Environment variables (loaded from `examples/.env` and then `.env`):
-
-```
-PAYER_KEY=0x...           # payer's private key used to sign the guarantee
-USER_ADDRESS=0x...        # payer's address to place in the guarantee claims
-RESOURCE_URL=http://localhost:9000/protected
-RESOURCE_METHOD=GET       # optional, defaults to GET
-FACILITATOR_URL=http://localhost:8080/  # optional, defaults to localhost
-ASSET_ADDRESS=0x...       # asset used for tab funding and guarantees
-```
-
-Run it from the repo root:
-
-```
-cargo run --example facilitator_rust
-```
-
-What it prints:
-- `X-PAYMENT` header you can attach to the protected request: `X-PAYMENT: <header>`
-- The resolved asset, tab id, and JSON body ready to send to `${FACILITATOR_URL}/verify` (already POSTed to `/settle` for you)
-- Settlement response from `${FACILITATOR_URL}/settle`
-
-Recommended flow:
-1) Start the facilitator (`cargo run`) pointed at your 4mica core API.
-2) (Optional) Start the mock paid API below on port 9000.
-3) Run the Rust example to generate the header, `/verify` body, and trigger settlement for the target resource. The SDK uses the `accepted` list emitted in the 402 response (if present) before falling back to the facilitator `/supported` list.
-
-## Mock paid API (`mock_paid_api.py`)
-
-A minimal FastAPI server that returns `402 Payment Required`, issues payment requirements via `/tab`, and calls the facilitator to verify X-PAYMENT headers.
+A minimal FastAPI server that returns `402 Payment Required`, issues payment requirements via `/tab`, and calls the facilitator to verify **and settle** X-PAYMENT headers on behalf of the user.
 
 Setup:
 ```
@@ -52,7 +21,26 @@ uvicorn examples.mock_paid_api:app --reload --port 9000 --factory
 ```
 
 Flow to exercise end-to-end:
-- GET `/protected` without X-PAYMENT to receive a 402 with `tabEndpoint` `/tab`.
-- POST `/tab` with `{ "userAddress": "<wallet>" }` to mint `paymentRequirements` for that wallet.
-- Use the Rust example above to build the X-PAYMENT header for those requirements.
-- Retry GET `/protected` with `X-PAYMENT: <header>`; the server calls the facilitator `/verify` under the hood and returns the paid content.
+- GET `/protected` without X-PAYMENT to receive a 402 with `paymentRequirementsTemplate` and `tabEndpoint` `/tab`.
+- POST `/tab` with `{ "userAddress": "<wallet>" }`; the server calls the facilitator `/tabs` and returns concrete `paymentRequirements` for that wallet.
+- Sign the requirements with your wallet to produce `X-PAYMENT` (no facilitator calls from the client).
+- Retry GET `/protected` with `X-PAYMENT: <header>`; the server calls the facilitator `/verify` **and** `/settle` and returns the paid content plus the facilitator responses.
+
+## Rust helper (`facilitator_rust.rs`)
+
+An optional diagnostics tool for operators to prepare headers with `rust-sdk-4mica` (not part of the user-facing x402 flow). It discovers requirements, requests tabs, signs, and prints the X-PAYMENT header plus the `/verify` body that the server will POST.
+
+Environment variables (loaded from `examples/.env` and then `.env`):
+```
+PAYER_KEY=0x...           # payer's private key used to sign the guarantee
+USER_ADDRESS=0x...        # payer's address to place in the guarantee claims
+RESOURCE_URL=http://localhost:9000/protected
+RESOURCE_METHOD=GET       # optional, defaults to GET
+FACILITATOR_URL=http://localhost:8080/  # optional, defaults to localhost
+ASSET_ADDRESS=0x...       # asset used for tab funding and guarantees
+```
+
+Run from the repo root for debugging:
+```
+cargo run --example facilitator_rust
+```

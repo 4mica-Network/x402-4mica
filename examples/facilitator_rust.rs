@@ -44,8 +44,8 @@ async fn main() -> Result<()> {
 
     println!("--- x402 / 4mica flow ---");
     println!("1) Discover 402 + accepted requirements from the resource");
-    println!("2) Request tab (if required), sign claims, and settle via facilitator");
-    println!("3) Retry the resource with X-PAYMENT using the header below\n");
+    println!("2) Request tab (if required) and sign claims locally");
+    println!("3) Retry the resource with X-PAYMENT using the header below (server will handle verify/settle)\n");
 
     let config = ConfigBuilder::default()
         .wallet_private_key(payer_key)
@@ -83,16 +83,18 @@ async fn main() -> Result<()> {
         X402Flow::with_base_url(core, &facilitator_url).context("invalid facilitator url")?;
     let request = PaymentRequest::new(resource_url, user_address).with_method_str(&method)?;
 
-    let settled = flow
-        .complete_payment(request)
+    // Prepare the payment requirements and signature. The resource server will call
+    // /verify and /settle; the client only needs to attach the X-PAYMENT header.
+    let prepared = flow
+        .prepare_payment(request)
         .await
-        .context("failed to complete payment lifecycle")?;
+        .context("failed to prepare payment")?;
 
-    let payment_asset = &settled.prepared.requirements.asset;
+    let payment_asset = &prepared.requirements.asset;
     println!("Payment asset address: {payment_asset}");
     println!(
         "Payment tabId: {}",
-        settled.prepared.requirements.extra["tabId"]
+        prepared.requirements.extra["tabId"]
     );
 
     // Sanity checks against the desired USDC flow.
@@ -102,7 +104,7 @@ async fn main() -> Result<()> {
         );
     }
 
-    let required_amount_raw = &settled.prepared.requirements.max_amount_required;
+    let required_amount_raw = &prepared.requirements.max_amount_required;
     if let Ok(required_amount) = parse_u256(required_amount_raw) {
         // Expect 0.0001 units (100 base units) if your resource advertises that price.
         let expected = U256::from(100u64);
@@ -118,14 +120,10 @@ async fn main() -> Result<()> {
             required_amount_raw
         );
     }
-    println!("X-PAYMENT header:\n{}\n", settled.header());
+    println!("X-PAYMENT header:\n{}\n", prepared.header());
     println!(
-        "Facilitator /verify body:\n{}",
-        to_string_pretty(settled.verify_body())?
-    );
-    println!(
-        "Facilitator /settle response:\n{}",
-        to_string_pretty(settled.settlement())?
+        "Facilitator /verify body (server will call):\n{}",
+        to_string_pretty(prepared.verify_body())?
     );
 
     Ok(())

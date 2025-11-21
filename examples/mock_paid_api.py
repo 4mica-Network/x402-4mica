@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Mock paid API that uses the x402 payment protocol to protect a resource.
+Mock paid API that uses the x402 payment protocol to protect a resource by verifying and
+settling user guarantees through the facilitator.
 
 The mock server acts as the resource server from the protocol diagram:
   • When a client calls the paid endpoint without a payment, respond with 402,
@@ -25,6 +26,7 @@ import binascii
 import json
 import os
 import time
+import logging
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence, Tuple, Union
 
@@ -46,6 +48,9 @@ DEFAULT_FACILITATOR_URL = "https://x402.4mica.xyz/"
 
 _ENV_FILE_CACHE: Optional[Dict[str, str]] = None
 _TAB_STATE: Dict[str, Dict[str, Any]] = {}
+logger = logging.getLogger("mock_paid_api")
+if not logger.handlers:
+    logging.basicConfig(level=logging.INFO, format="mock_paid_api %(levelname)s: %(message)s")
 
 
 def _load_env_file() -> Dict[str, str]:
@@ -350,37 +355,12 @@ def _user_address_from_header(header: str) -> Optional[str]:
     return _maybe_normalize_address(claims.get("user_address"), field="claims.user_address")
 
 
-def encode_demo_header(requirements: JsonDict) -> str:
-    payload = {
-        "x402Version": 1,
-        "scheme": requirements["scheme"],
-        "network": requirements["network"],
-        "payload": {
-            "claims": {
-                "user_address": requirements["extra"]["userAddress"],
-                "recipient_address": requirements["payTo"],
-                "tab_id": requirements["extra"]["tabId"],
-                "amount": requirements["maxAmountRequired"],
-                "asset_address": requirements["asset"],
-                "timestamp": 1,
-            },
-            "signature": "0xdeadbeef",
-            "signingScheme": "eip712",
-        },
-    }
-    encoded = json.dumps(payload, separators=(",", ":"))
-    return base64.b64encode(encoded.encode("utf-8")).decode("utf-8")
-
-
-def expected_header(requirements: JsonDict) -> str:
-    override = os.environ.get("MOCK_EXPECTED_HEADER")
-    if override:
-        return override
-    return encode_demo_header(requirements)
-
-
 def verify_with_facilitator(
-    facilitator_url: str, header: str, requirements: JsonDict
+    facilitator_url: str,
+    header: str,
+    requirements: JsonDict,
+    *,
+    user_address: Optional[str] = None,
 ) -> Tuple[bool, Optional[JsonDict], Optional[str]]:
     payload = {
         "x402Version": 1,
@@ -388,17 +368,79 @@ def verify_with_facilitator(
         "paymentRequirements": json.loads(json.dumps(requirements)),
     }
     endpoint = f"{facilitator_url.rstrip('/')}/verify"
+    tab_id = requirements.get("extra", {}).get("tabId")
+    logger.info(
+        "POST %s (verify) tab=%s user=%s", endpoint, tab_id, user_address or "unknown"
+    )
     try:
         response = requests.post(endpoint, json=payload, timeout=10)
         response.raise_for_status()
     except requests.RequestException as err:
+        logger.warning(
+            "facilitator verify failed tab=%s user=%s: %s",
+            tab_id,
+            user_address or "unknown",
+            err,
+        )
         return False, None, f"failed to contact facilitator at {endpoint}: {err}"
-
     data = response.json()
     if data.get("isValid") is True:
+        logger.info("facilitator verify success tab=%s user=%s", tab_id, user_address or "unknown")
         return True, data, None
 
     reason = data.get("invalidReason") or "facilitator rejected payment"
+    logger.warning(
+        "facilitator verify rejected tab=%s user=%s reason=%s",
+        tab_id,
+        user_address or "unknown",
+        reason,
+    )
+    return False, data, reason
+
+
+def settle_with_facilitator(
+    facilitator_url: str,
+    header: str,
+    requirements: JsonDict,
+    *,
+    user_address: Optional[str] = None,
+) -> Tuple[bool, Optional[JsonDict], Optional[str]]:
+    payload = {
+        "x402Version": 1,
+        "paymentHeader": header,
+        "paymentRequirements": json.loads(json.dumps(requirements)),
+    }
+    endpoint = f"{facilitator_url.rstrip('/')}/settle"
+    tab_id = requirements.get("extra", {}).get("tabId")
+    logger.info(
+        "POST %s (settle) tab=%s user=%s", endpoint, tab_id, user_address or "unknown"
+    )
+    try:
+        response = requests.post(endpoint, json=payload, timeout=10)
+        response.raise_for_status()
+    except requests.RequestException as err:
+        logger.warning(
+            "facilitator settle failed tab=%s user=%s: %s",
+            tab_id,
+            user_address or "unknown",
+            err,
+        )
+        return False, None, f"failed to contact facilitator at {endpoint}: {err}"
+
+    data = response.json()
+    if data.get("success") is True:
+        logger.info(
+            "facilitator settle success tab=%s user=%s", tab_id, user_address or "unknown"
+        )
+        return True, data, None
+
+    reason = data.get("error") or "facilitator rejected settlement"
+    logger.warning(
+        "facilitator settle rejected tab=%s user=%s reason=%s",
+        tab_id,
+        user_address or "unknown",
+        reason,
+    )
     return False, data, reason
 
 
@@ -406,7 +448,6 @@ def create_app() -> FastAPI:
     app = FastAPI(title="Mock Paid API")
 
     requirements_state: Dict[str, JsonDict] = {}
-    expected_state: Dict[str, Optional[str]] = {}
     facilitator_url = _config_value(
         "FACILITATOR_URL",
         required=False,
@@ -420,7 +461,6 @@ def create_app() -> FastAPI:
 
     def _record_requirements(user_address: str, requirements: JsonDict) -> None:
         requirements_state[user_address] = _clone_requirements(requirements)
-        expected_state[user_address] = expected_header(requirements)
 
     def _active_requirements(user_address: str) -> Optional[JsonDict]:
         entry = requirements_state.get(user_address)
@@ -430,7 +470,6 @@ def create_app() -> FastAPI:
 
     def _clear_user_state(user_address: str) -> None:
         requirements_state.pop(user_address, None)
-        expected_state.pop(user_address, None)
 
     @app.get("/")
     async def index() -> JsonDict:
@@ -472,9 +511,10 @@ def create_app() -> FastAPI:
     async def protected_resource(
         x_payment: Optional[str] = Header(default=None, alias="X-PAYMENT")
     ) -> JSONResponse:
+        logger.info("received /protected request (has_x_payment=%s)", bool(x_payment))
         if x_payment is None:
             response_body = {
-                "error": "payment required",
+                "error": "guarantee required",
                 "paymentRequirementsTemplate": template_requirements,
                 "tabEndpoint": tab_endpoint,
                 "hint": "Send POST /tab with { userAddress } to mint payment requirements for your wallet.",
@@ -483,8 +523,9 @@ def create_app() -> FastAPI:
 
         user_address = _user_address_from_header(x_payment)
         if user_address is None:
+            logger.warning("X-PAYMENT missing or invalid; cannot extract user address")
             response_body = {
-                "error": "invalid payment header",
+                "error": "invalid guarantee header",
                 "hint": "Unable to extract user address; request a tab and retry.",
                 "tabEndpoint": tab_endpoint,
             }
@@ -492,6 +533,7 @@ def create_app() -> FastAPI:
 
         requirements = _active_requirements(user_address)
         if requirements is None:
+            logger.warning("no active tab for user=%s; prompting /tab", user_address)
             response_body = {
                 "error": "tab required",
                 "hint": "Call POST /tab with your wallet to receive paymentRequirements.",
@@ -499,45 +541,90 @@ def create_app() -> FastAPI:
             }
             return JSONResponse(response_body, status_code=status.HTTP_402_PAYMENT_REQUIRED)
 
-        expected = expected_state.get(user_address)
-        if expected is None:
-            expected = expected_header(requirements)
-            expected_state[user_address] = expected
-
+        logger.info(
+            "verifying user guarantee tab=%s user=%s resource=%s",
+            requirements.get("extra", {}).get("tabId"),
+            user_address,
+            requirements.get("resource"),
+        )
         success, verify_response, failure_reason = verify_with_facilitator(
-            facilitator_url, x_payment, requirements
+            facilitator_url, x_payment, requirements, user_address=user_address
         )
         if success:
-            body: JsonDict = {"message": "paid content"}
+            logger.info(
+                "settling user guarantee tab=%s user=%s resource=%s",
+                requirements.get("extra", {}).get("tabId"),
+                user_address,
+                requirements.get("resource"),
+            )
+            settle_ok, settle_response, settle_reason = settle_with_facilitator(
+                facilitator_url, x_payment, requirements, user_address=user_address
+            )
+            if not settle_ok:
+                logger.warning(
+                    "facilitator settle failed tab=%s reason=%s",
+                    requirements.get("extra", {}).get("tabId"),
+                    settle_reason,
+                )
+                response_body = {
+                    "error": "guarantee settlement failed",
+                    "paymentRequirements": requirements,
+                    "tabEndpoint": tab_endpoint,
+                    "hint": settle_reason or "settlement rejected by facilitator",
+                    "facilitatorResponse": settle_response,
+                }
+                return JSONResponse(
+                    response_body, status_code=status.HTTP_502_BAD_GATEWAY
+                )
+
             tab_id = requirements.get("extra", {}).get("tabId")
-            if tab_id is not None:
-                body["tab"] = tab_id
+            certificate = None
+            network_id = None
+            if isinstance(settle_response, dict):
+                certificate = settle_response.get("certificate")
+                network_id = settle_response.get("networkId") or settle_response.get("network")
+
+            body: JsonDict = {
+                "message": "paid content",
+                "guarantee": {
+                    k: v
+                    for k, v in {
+                        "tabId": tab_id,
+                        "userAddress": user_address,
+                        "payTo": requirements.get("payTo"),
+                        "asset": requirements.get("asset"),
+                        "amount": requirements.get("maxAmountRequired"),
+                        "networkId": network_id,
+                        "certificate": certificate,
+                    }.items()
+                    if v is not None
+                },
+            }
             if verify_response is not None:
                 body["verify"] = verify_response
+            if settle_response is not None:
+                body["settle"] = settle_response
             _clear_user_state(user_address)
+            logger.info("guarantee settled tab=%s user=%s", tab_id, user_address)
             return JSONResponse(body)
 
-        if x_payment == expected:
-            body: JsonDict = {"message": "paid content"}
-            tab_id = requirements.get("extra", {}).get("tabId")
-            if tab_id is not None:
-                body["tab"] = tab_id
-            _clear_user_state(user_address)
-            return JSONResponse(body)
-
+        logger.warning(
+            "facilitator verify failed tab=%s reason=%s",
+            requirements.get("extra", {}).get("tabId"),
+            failure_reason,
+        )
         response_body = {
-            "error": "payment required",
+            "error": "guarantee verification failed",
             "paymentRequirements": requirements,
             "tabEndpoint": tab_endpoint,
         }
         if failure_reason:
             response_body["hint"] = failure_reason
-        else:
-            response_body["hint"] = "header does not match the demo signature"
         if verify_response is not None:
             response_body["facilitatorResponse"] = verify_response
         return JSONResponse(response_body, status_code=status.HTTP_402_PAYMENT_REQUIRED)
 
+    _ = (index, issue_tab, protected_resource)
     return app
 
 
