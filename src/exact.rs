@@ -242,9 +242,7 @@ impl HttpExactService {
             (!trimmed.is_empty()).then_some(trimmed)
         };
 
-        let Some(url) = std::env::var(ENV_DEBIT_URL).ok().and_then(sanitize) else {
-            return None;
-        };
+        let url = std::env::var(ENV_DEBIT_URL).ok().and_then(sanitize)?;
         Some((url, ENV_DEBIT_URL))
     }
 

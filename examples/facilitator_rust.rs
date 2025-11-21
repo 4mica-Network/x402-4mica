@@ -8,11 +8,11 @@ use serde_json::to_string_pretty;
 
 fn load_env_files() {
     for path in ["examples/.env", ".env"] {
-        if let Err(err) = from_filename(path) {
-            if !matches!(&err, dotenvy::Error::Io(io_err) if io_err.kind() == ErrorKind::NotFound) {
-                eprintln!("warning: failed to load {path}: {err}");
-            }
-        }
+        if let Err(err) = from_filename(path)
+            && !matches!(&err, dotenvy::Error::Io(io_err) if io_err.kind() == ErrorKind::NotFound)
+        {
+            eprintln!("warning: failed to load {path}: {err}");
+        };
     }
 }
 
@@ -38,19 +38,31 @@ async fn main() -> Result<()> {
     let core = Client::new(config)
         .await
         .context("failed to init 4mica core client")?;
-    let flow = FacilitatorFlow::with_facilitator_url(core, facilitator_url)
+    let flow = FacilitatorFlow::with_facilitator_url(core, &facilitator_url)
         .context("invalid facilitator url")?;
     let request = PaymentRequest::new(resource_url, user_address).with_method_str(&method)?;
 
-    let payment = flow
-        .prepare_payment(request)
+    let settled = flow
+        .complete_payment(request)
         .await
-        .context("failed to prepare payment")?;
+        .context("failed to complete payment lifecycle")?;
 
-    println!("X-PAYMENT header:\n{}\n", payment.header());
+    println!(
+        "Payment asset address: {}",
+        settled.prepared.requirements.asset
+    );
+    println!(
+        "Payment tabId: {}",
+        settled.prepared.requirements.extra["tabId"]
+    );
+    println!("X-PAYMENT header:\n{}\n", settled.header());
     println!(
         "Facilitator /verify body:\n{}",
-        to_string_pretty(payment.verify_body())?
+        to_string_pretty(settled.verify_body())?
+    );
+    println!(
+        "Facilitator /settle response:\n{}",
+        to_string_pretty(settled.settlement())?
     );
 
     Ok(())

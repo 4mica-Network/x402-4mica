@@ -1830,8 +1830,6 @@ checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
 [[package]]
 name = "crypto-4mica"
 version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0da2a39a94b2db8f02d565761ec0136092b576e101aee68711a6ea7a8a39de1c"
 dependencies = [
  "alloy",
  "anyhow",
@@ -4650,8 +4648,6 @@ dependencies = [
 [[package]]
 name = "rpc-4mica"
 version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2099367deb3e9368d378ba89dacc556c612e156e78a92dc134dd9b5c7d76fe94"
 dependencies = [
  "alloy-primitives",
  "alloy-sol-types",
@@ -4701,15 +4697,17 @@ checksum = "48fd7bd8a6377e15ad9d42a8ec25371b94ddc67abe7c8b9127bec79bebaaae18"
 [[package]]
 name = "rust-sdk-4mica"
 version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "86e715c7632b1eac2579f9acb8c9d94abe47ab3b41faf147e38fbb5beb7c2d8f"
 dependencies = [
  "alloy",
  "anyhow",
  "async-trait",
+ "base64 0.22.1",
  "crypto-4mica",
  "log",
+ "reqwest",
  "rpc-4mica",
+ "serde",
+ "serde_json",
  "thiserror 2.0.17",
  "url",
 ]

@@ -38,11 +38,11 @@ JsonDict = Dict[str, Any]
 ENV_PATH = Path(__file__).with_name(".env")
 DEFAULT_SCHEME = "4mica-credit"
 DEFAULT_NETWORK = "polygon-amoy"
-DEFAULT_MAX_AMOUNT = "0x2386f26fc10000"  # 0.01 ETH
-DEFAULT_ASSET = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+DEFAULT_MAX_AMOUNT = "0.00001"  
+DEFAULT_ASSET = "0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582"
 DEFAULT_DESCRIPTION = "Demo paid API – 4mica tab verification required"
 DEFAULT_RESOURCE = "mock-paid-endpoint"
-DEFAULT_FACILITATOR_URL = "http://localhost:8080"
+DEFAULT_FACILITATOR_URL = "https://x402.4mica.xyz/"
 
 _ENV_FILE_CACHE: Optional[Dict[str, str]] = None
 _TAB_STATE: Dict[str, Dict[str, Any]] = {}

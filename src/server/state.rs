@@ -468,7 +468,8 @@ impl TabService for CoreTabService {
 
         let result: CoreCreateTabResponse = self.post("core/payment-tabs", &payload).await?;
         let tab_id = canonical_u256(&result.id);
-        let asset_address = request
+        // Use the asset the core service actually persisted for the tab, falling back to ETH.
+        let asset_address = result
             .erc20_token
             .clone()
             .unwrap_or_else(|| ETH_SENTINEL_ADDRESS.to_string());
@@ -796,4 +797,6 @@ struct CoreCreateTabRequest {
 #[derive(Debug, Deserialize)]
 struct CoreCreateTabResponse {
     id: U256,
+    #[serde(default)]
+    erc20_token: Option<String>,
 }
