@@ -454,6 +454,23 @@ impl CoreTabService {
             Err(TabError::Upstream { status, message })
         }
     }
+
+    async fn get<Resp>(&self, path: &str) -> Result<Resp, TabError>
+    where
+        Resp: for<'de> Deserialize<'de>,
+    {
+        let url = self.url(path)?;
+        let response = self
+            .client
+            .get(url)
+            .send()
+            .await
+            .map_err(|err| TabError::Upstream {
+                status: StatusCode::BAD_GATEWAY,
+                message: err.to_string(),
+            })?;
+        Self::decode_response(response).await
+    }
 }
 
 #[async_trait]
@@ -468,11 +485,18 @@ impl TabService for CoreTabService {
 
         let result: CoreCreateTabResponse = self.post("core/payment-tabs", &payload).await?;
         let tab_id = canonical_u256(&result.id);
-        // Use the asset the core service actually persisted for the tab, falling back to ETH.
-        let asset_address = result
+        let fallback_asset = result
             .erc20_token
             .clone()
             .unwrap_or_else(|| ETH_SENTINEL_ADDRESS.to_string());
+        let asset_address = match self.fetch_tab_asset(&tab_id).await {
+            Ok(Some(asset)) => asset,
+            Ok(None) => fallback_asset.clone(),
+            Err(err) => {
+                tracing::warn!(%err, "failed to fetch tab asset from core; falling back to request erc20_token/ETH sentinel");
+                fallback_asset.clone()
+            }
+        };
         let start_timestamp = current_timestamp();
         let ttl_seconds = request
             .ttl_seconds
@@ -487,6 +511,14 @@ impl TabService for CoreTabService {
             start_timestamp,
             ttl_seconds,
         })
+    }
+}
+
+impl CoreTabService {
+    async fn fetch_tab_asset(&self, tab_id: &str) -> Result<Option<String>, TabError> {
+        let path = format!("core/payment-tabs/{tab_id}");
+        let tab: Option<CoreTabInfo> = self.get(&path).await?;
+        Ok(tab.map(|t| t.asset_address))
     }
 }
 
@@ -799,4 +831,10 @@ struct CoreCreateTabResponse {
     id: U256,
     #[serde(default)]
     erc20_token: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CoreTabInfo {
+    #[serde(alias = "asset_address", alias = "assetAddress")]
+    asset_address: String,
 }
