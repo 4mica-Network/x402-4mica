@@ -9000,6 +9000,7 @@ dependencies = [
  "dotenvy",
  "hex",
  "reqwest",
+ "rpc-4mica",
  "rust-sdk-4mica",
  "serde",
  "serde_json",

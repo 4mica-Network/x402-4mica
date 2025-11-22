@@ -8,9 +8,11 @@ use async_trait::async_trait;
 use axum::http::StatusCode;
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use reqwest::{Client, Url};
-use rust_sdk_4mica::{
-    Address, BLSCert, PaymentGuaranteeClaims, PaymentGuaranteeRequestClaims, SigningScheme, U256,
+use rpc::{
+    PaymentGuaranteeClaims, PaymentGuaranteeRequest, PaymentGuaranteeRequestClaims,
+    PaymentGuaranteeRequestClaimsV1,
 };
+use rust_sdk_4mica::{Address, BLSCert, U256, x402::X402PaymentEnvelope};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
@@ -209,7 +211,7 @@ impl FourMicaHandler {
         header_b64: &str,
         reqs: &PaymentRequirements,
     ) -> Result<VerifyResponse, ValidationError> {
-        self.prepare_and_validate(header_b64, reqs)?;
+        self.decode_and_validate_payment_payload(header_b64, reqs)?;
 
         Ok(VerifyResponse {
             is_valid: true,
@@ -223,11 +225,11 @@ impl FourMicaHandler {
         header_b64: &str,
         reqs: &PaymentRequirements,
     ) -> Result<SettleResponse, ValidationError> {
-        let prepared = self.prepare_and_validate(header_b64, reqs)?;
+        let payload = self.decode_and_validate_payment_payload(header_b64, reqs)?;
 
         let certificate = self
             .issuer
-            .issue(&prepared.claims, &prepared.signature, prepared.scheme)
+            .issue(payload.claims.clone(), payload.signature, payload.scheme)
             .await
             .map_err(ValidationError::IssueGuarantee)?;
 
@@ -236,7 +238,11 @@ impl FourMicaHandler {
             .verify_certificate(&certificate)
             .map_err(ValidationError::InvalidCertificate)?;
 
-        self.ensure_certificate_matches_claims(&prepared.claims, &claims)?;
+        match &payload.claims {
+            PaymentGuaranteeRequestClaims::V1(claims_request) => {
+                self.ensure_certificate_matches_claims_v1(claims_request, &claims)?;
+            }
+        }
 
         tracing::info!(
             tab_id = format!("{:#x}", claims.tab_id),
@@ -251,12 +257,23 @@ impl FourMicaHandler {
         ))
     }
 
-    fn prepare_claim(
+    fn decode_header_into_payment_payload(
         &self,
         header_b64: &str,
         reqs: &PaymentRequirements,
-    ) -> Result<PreparedClaim, ValidationError> {
-        let envelope = decode_payment_header(header_b64).map_err(ValidationError::InvalidHeader)?;
+    ) -> Result<PaymentGuaranteeRequest, ValidationError> {
+        let envelope: X402PaymentEnvelope = {
+            let decoded = BASE64_STANDARD.decode(header_b64.trim()).map_err(|err| {
+                ValidationError::InvalidHeader(format!(
+                    "failed to base64 decode payment header: {err}"
+                ))
+            })?;
+            serde_json::from_slice(&decoded).map_err(|err| {
+                ValidationError::InvalidHeader(format!(
+                    "failed to deserialize payment header: {err}"
+                ))
+            })?
+        };
 
         if envelope.scheme != self.scheme {
             return Err(ValidationError::UnsupportedScheme(envelope.scheme));
@@ -270,11 +287,12 @@ impl FourMicaHandler {
         if reqs.network != self.network {
             return Err(ValidationError::UnsupportedNetwork(reqs.network.clone()));
         }
-        if envelope.x402_version != SUPPORTED_VERSION {
-            return Err(ValidationError::UnsupportedVersion(envelope.x402_version));
+        if envelope.x402_version as u8 != SUPPORTED_VERSION {
+            return Err(ValidationError::UnsupportedVersion(
+                envelope.x402_version as u8,
+            ));
         }
 
-        let scheme = parse_signing_scheme(envelope.payload.signing_scheme.as_deref())?;
         let signature = envelope.payload.signature.trim();
         if signature.is_empty() {
             return Err(ValidationError::InvalidHeader(
@@ -282,30 +300,29 @@ impl FourMicaHandler {
             ));
         }
 
-        Ok(PreparedClaim {
-            claims: envelope.payload.claims,
-            signature: signature.to_string(),
-            scheme,
-        })
+        Ok(envelope.payload)
     }
 
-    fn prepare_and_validate(
+    fn decode_and_validate_payment_payload(
         &self,
         header_b64: &str,
         reqs: &PaymentRequirements,
-    ) -> Result<PreparedClaim, ValidationError> {
-        let prepared = self.prepare_claim(header_b64, reqs)?;
-        self.ensure_claims_match_requirements(&prepared.claims, reqs)?;
-        Ok(prepared)
+    ) -> Result<PaymentGuaranteeRequest, ValidationError> {
+        let payload = self.decode_header_into_payment_payload(header_b64, reqs)?;
+        match &payload.claims {
+            PaymentGuaranteeRequestClaims::V1(claims) => {
+                self.ensure_claims_v1_match_requirements(claims, reqs)?;
+            }
+        }
+
+        Ok(payload)
     }
 
-    fn ensure_claims_match_requirements(
+    fn ensure_claims_v1_match_requirements(
         &self,
-        claims: &PaymentGuaranteeRequestClaims,
+        claims: &PaymentGuaranteeRequestClaimsV1,
         reqs: &PaymentRequirements,
     ) -> Result<(), ValidationError> {
-        let extra = parse_extra(&reqs.extra)?;
-
         let required_pay_to = Address::from_str(&reqs.pay_to)
             .map_err(|_| ValidationError::InvalidRequirements("invalid payTo address".into()))?;
         let claim_recipient = Address::from_str(&claims.recipient_address).map_err(|_| {
@@ -332,28 +349,6 @@ impl FourMicaHandler {
             )));
         }
 
-        let expected_user = parse_address(&extra.user_address).map_err(|_| {
-            ValidationError::InvalidRequirements("invalid userAddress in requirements.extra".into())
-        })?;
-        let claim_user = parse_address(&claims.user_address)
-            .map_err(|_| ValidationError::InvalidClaims("invalid user_address in claims".into()))?;
-        if claim_user != expected_user {
-            return Err(ValidationError::Mismatch(format!(
-                "claim user {} does not match expected user {}",
-                claim_user, expected_user
-            )));
-        }
-
-        let expected_tab = parse_u256_str(&extra.tab_id).map_err(|_| {
-            ValidationError::InvalidRequirements("invalid tabId in requirements.extra".into())
-        })?;
-        if claims.tab_id != expected_tab {
-            return Err(ValidationError::Mismatch(format!(
-                "claim tab_id {} does not match expected tab_id {}",
-                claims.tab_id, expected_tab
-            )));
-        }
-
         let amount_required =
             parse_u256(&reqs.max_amount_required).map_err(ValidationError::InvalidRequirements)?;
         if claims.amount.is_zero() {
@@ -371,9 +366,9 @@ impl FourMicaHandler {
         Ok(())
     }
 
-    fn ensure_certificate_matches_claims(
+    fn ensure_certificate_matches_claims_v1(
         &self,
-        request: &PaymentGuaranteeRequestClaims,
+        request: &PaymentGuaranteeRequestClaimsV1,
         issued: &PaymentGuaranteeClaims,
     ) -> Result<(), ValidationError> {
         if issued.tab_id != request.tab_id
@@ -724,49 +719,6 @@ impl SettleResponse {
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct PaymentEnvelope {
-    #[serde(rename = "x402Version")]
-    x402_version: u8,
-    scheme: String,
-    network: String,
-    payload: FourMicaPaymentPayload,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct FourMicaPaymentPayload {
-    claims: PaymentGuaranteeRequestClaims,
-    signature: String,
-    #[serde(default)]
-    signing_scheme: Option<String>,
-}
-
-struct PreparedClaim {
-    claims: PaymentGuaranteeRequestClaims,
-    signature: String,
-    scheme: SigningScheme,
-}
-
-fn decode_payment_header(header_b64: &str) -> Result<PaymentEnvelope, String> {
-    let trimmed = header_b64.trim();
-    let decoded = BASE64_STANDARD
-        .decode(trimmed)
-        .map_err(|err| format!("failed to base64 decode payment header: {err}"))?;
-    serde_json::from_slice(&decoded)
-        .map_err(|err| format!("failed to decode payment header JSON: {err}"))
-}
-
-fn parse_signing_scheme(value: Option<&str>) -> Result<SigningScheme, ValidationError> {
-    match value.unwrap_or("eip712").to_ascii_lowercase().as_str() {
-        "eip712" => Ok(SigningScheme::Eip712),
-        "eip191" => Ok(SigningScheme::Eip191),
-        other => Err(ValidationError::InvalidHeader(format!(
-            "unsupported signingScheme {other}",
-        ))),
-    }
-}
-
 fn parse_u256(value: &str) -> Result<U256, String> {
     if value.is_empty() {
         return Err("maxAmountRequired cannot be empty".into());
@@ -775,34 +727,6 @@ fn parse_u256(value: &str) -> Result<U256, String> {
         U256::from_str_radix(rest, 16).map_err(|err| format!("invalid hex amount: {err}"))
     } else {
         U256::from_str_radix(value, 10).map_err(|err| format!("invalid decimal amount: {err}"))
-    }
-}
-
-fn parse_u256_str(value: &str) -> Result<U256, String> {
-    parse_u256(value)
-}
-
-fn parse_address(value: &str) -> Result<Address, String> {
-    Address::from_str(value).map_err(|err| err.to_string())
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RequirementsExtra {
-    #[serde(rename = "tabId")]
-    tab_id: String,
-    #[serde(rename = "userAddress")]
-    user_address: String,
-}
-
-fn parse_extra(extra: &Option<Value>) -> Result<RequirementsExtra, ValidationError> {
-    match extra {
-        Some(value) => serde_json::from_value::<RequirementsExtra>(value.clone()).map_err(|err| {
-            ValidationError::InvalidRequirements(format!("invalid requirements.extra: {err}"))
-        }),
-        None => Err(ValidationError::InvalidRequirements(
-            "paymentRequirements.extra must include tabId and userAddress".into(),
-        )),
     }
 }
 

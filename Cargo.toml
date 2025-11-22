@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0"
+rpc-4mica = { version = "0.3.1", path = "../4mica-core/crates/rpc" }
 rust-sdk-4mica = { version = "0.3.1", path = "../4mica-core/sdk" }
 axum = { version = "0.8.6", features = ["macros", "json"] }
 base64 = "0.22"

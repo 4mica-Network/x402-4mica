@@ -1,14 +1,14 @@
 use async_trait::async_trait;
 use reqwest::Url;
-use rust_sdk_4mica::{BLSCert, PaymentGuaranteeRequestClaims, SigningScheme};
-use serde_json::{Value, json};
+use rpc::{PaymentGuaranteeRequest, PaymentGuaranteeRequestClaims, SigningScheme};
+use rust_sdk_4mica::BLSCert;
 
 #[async_trait]
 pub trait GuaranteeIssuer: Send + Sync {
     async fn issue(
         &self,
-        claims: &PaymentGuaranteeRequestClaims,
-        signature: &str,
+        claims: PaymentGuaranteeRequestClaims,
+        signature: String,
         scheme: SigningScheme,
     ) -> Result<BLSCert, String>;
 }
@@ -25,47 +25,17 @@ impl LiveGuaranteeIssuer {
             base_url,
         })
     }
-
-    fn build_request_body(
-        &self,
-        claims: &PaymentGuaranteeRequestClaims,
-        signature: &str,
-        scheme: SigningScheme,
-    ) -> Result<Value, String> {
-        if signature.trim().is_empty() {
-            return Err("signature cannot be empty".into());
-        }
-
-        let mut claims_value = serde_json::to_value(claims).map_err(|err| err.to_string())?;
-        match &mut claims_value {
-            Value::Object(map) => {
-                map.insert("version".into(), Value::String("v1".into()));
-            }
-            _ => return Err("claims payload must serialize to an object".into()),
-        }
-
-        let scheme_str = match scheme {
-            SigningScheme::Eip712 => "eip712",
-            SigningScheme::Eip191 => "eip191",
-        };
-
-        Ok(json!({
-            "claims": claims_value,
-            "signature": signature,
-            "scheme": scheme_str,
-        }))
-    }
 }
 
 #[async_trait]
 impl GuaranteeIssuer for LiveGuaranteeIssuer {
     async fn issue(
         &self,
-        claims: &PaymentGuaranteeRequestClaims,
-        signature: &str,
+        claims: PaymentGuaranteeRequestClaims,
+        signature: String,
         scheme: SigningScheme,
     ) -> Result<BLSCert, String> {
-        let body = self.build_request_body(claims, signature, scheme)?;
+        let body = PaymentGuaranteeRequest::new(claims, signature, scheme);
 
         let mut url = self.base_url.clone();
         url.set_path("core/guarantees");
@@ -110,34 +80,5 @@ pub(crate) fn parse_error_message(bytes: &[u8]) -> String {
     match std::str::from_utf8(bytes) {
         Ok(text) if !text.trim().is_empty() => text.trim().to_string(),
         _ => "unknown error".to_string(),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use rust_sdk_4mica::U256;
-
-    fn sample_claims() -> PaymentGuaranteeRequestClaims {
-        PaymentGuaranteeRequestClaims {
-            user_address: "0x1".into(),
-            recipient_address: "0x2".into(),
-            tab_id: U256::from(1u8),
-            amount: U256::from(2u8),
-            asset_address: "0x3".into(),
-            timestamp: 123,
-        }
-    }
-
-    #[test]
-    fn build_request_body_injects_version_and_scheme() {
-        let issuer = LiveGuaranteeIssuer::try_new(Url::parse("http://example.com").unwrap())
-            .expect("issuer");
-        let body = issuer
-            .build_request_body(&sample_claims(), "0xdeadbeef", SigningScheme::Eip191)
-            .expect("body");
-        let version = body.get("claims").unwrap().get("version").unwrap();
-        assert_eq!(version, "v1");
-        assert_eq!(body.get("scheme").unwrap(), "eip191");
     }
 }
