@@ -41,7 +41,7 @@ x402-4mica and the 4mica core service.
    - Client → Recipient resource: `POST /tab` (or an equivalent endpoint) with their
      `{ userAddress, erc20Token?, ttlSeconds? }`.
    - Recipient → Facilitator: `POST /tabs` using the supplied body. The facilitator will reuse the
-     existing tab for that `(user, recipient, asset)` pair or create a fresh one.
+     existing tab for that `(user, recipient, asset)` combination or create a fresh one.
    - Facilitator → 4mica core: `POST core/payment-tabs` whenever a new tab is required.
    - Facilitator → Recipient: `{ tabId, userAddress, recipientAddress, assetAddress, startTimestamp, ttlSeconds }`.
      The recipient stores this tab metadata for the user.
@@ -79,13 +79,15 @@ x402-4mica and the 4mica core service.
 ## Responsibilities
 
 **Client (payer)**
+
 - Collect the latest `paymentRequirements` from the resource server.
 - Produce a guarantee payload whose fields exactly match what the recipient advertised (tab id,
   addresses, asset, and amount).
-- Sign the payload with the key that matches `paymentRequirements.extra.userAddress` and send the
+- Sign the payload and send the
   resulting `X-PAYMENT` header when retrying the protected request.
 
 **Recipient / resource server**
+
 - When a wallet requests credit, forward `{ userAddress, recipientAddress, ... }` to the facilitator
   via `POST /tabs`, caching the returned tab per user and refreshing it when TTLs lapse.
 - Embed the resulting `tabId`, `userAddress`, the desired `payTo`, and the tightest
@@ -97,7 +99,7 @@ x402-4mica and the 4mica core service.
 
 ## Swapping from x402-rs to the 4mica facilitator
 
-If you already run a standard x402 resource server (for example from `~/x402-rs`), you can point it
+If you already run a standard x402 resource server (for example from `x402-rs`), you can point it
 at the 4mica facilitator with minimal changes:
 
 - **Server config** – change the facilitator base URL your resource uses for `/tabs`, `/verify`, and
@@ -107,7 +109,7 @@ at the 4mica facilitator with minimal changes:
   the service). Keep using the same `(scheme, network)` in your `paymentRequirements` and in the
   client header.
 - **Tabs are required** – keep issuing tabs by POSTing `/tabs` with `{ userAddress, recipientAddress,
-  erc20Token?, ttlSeconds? }`. Reuse cached tabs until they expire; put `tabId` and `userAddress` in
+erc20Token?, ttlSeconds? }`. Reuse cached tabs until they expire; put `tabId` and `userAddress` in
   `paymentRequirements.extra`.
 - **Strict amount matching** – the 4mica flow requires the signed `claims.amount` to equal
   `paymentRequirements.maxAmountRequired` exactly (no partial spends). Set `maxAmountRequired`
@@ -151,7 +153,7 @@ at the 4mica facilitator with minimal changes:
 {
   "x402Version": 1,
   "scheme": "4mica-credit",
-  "network": "sepolia-mainnet",
+  "network": "sepolia-testnet",
   "payload": {
     "claims": {
       "user_address": "<0x-prefixed checksum string>",
@@ -159,10 +161,11 @@ at the 4mica facilitator with minimal changes:
       "tab_id": "<decimal or 0x value>",
       "amount": "<decimal or 0x value>",
       "asset_address": "<0x-prefixed checksum string>",
-      "timestamp": 1716500000
+      "timestamp": 1716500000,
+      "version": 1
     },
     "signature": "<0x-prefixed wallet signature>",
-    "signingScheme": "eip712"
+    "scheme": "eip712"
   }
 }
 ```
@@ -172,7 +175,6 @@ The facilitator enforces that:
 - `scheme` / `network` match both `/supported` and the resource server’s requirements.
 - `payTo` equals the `recipient_address` present inside the claim.
 - `asset` and `maxAmountRequired` must match the signed `amount` exactly (no partial spends).
-- `paymentRequirements.extra.tabId` and `.userAddress` match the claim’s `tab_id` and `user_address`.
 - If `X402_GUARANTEE_DOMAIN` is set (legacy `FOUR_MICA_GUARANTEE_DOMAIN` / `4MICA_GUARANTEE_DOMAIN`
   are also honored), the certificate domain returned by core matches it exactly.
 
@@ -230,41 +232,23 @@ that resource servers should use inside their `402 Payment Required` responses.
 
 ## Rust client example
 
-If you have the local SDK at `~/4mica-core/sdk`, the bundled Rust example shows how to sign a payment
-header with `rust-sdk-4mica` and call `/verify`:
+The bundled Rust example shows how to sign a payment
+header with `rust-sdk-4mica`:
 
 ```bash
-# uses FACILITATOR_URL (default http://localhost:8080/) and:
-# PAYER_KEY, USER_ADDRESS, RESOURCE_URL (auto fetches tab + paymentRequirements)
-# or: TAB_ID, AMOUNT, RECIPIENT_ADDRESS, ASSET_ADDRESS when RESOURCE_URL is unset
-cargo run --example facilitator_rust -- verify http://localhost:8080/
-
-# End-to-end demo: discover → tab → sign → /verify → resource retry → /settle
-cargo run --example facilitator_rust -- demo http://localhost:8080/
+# requires PAYER_KEY, USER_ADDRESS, RESOURCE_URL and ASSET_ADDRESS
+cargo run --example x402_flow -- verify http://localhost:8080/
 ```
+
 The example will read environment variables from `examples/.env` (or a root `.env`) if present.
 
-To just view `/supported`, run:
+The mock paid API (`examples/server/mock_paid_api.py`) remains available for quick end-to-end smoke tests.
 
-```bash
-cargo run --example facilitator_rust -- supported http://localhost:8080/
-```
-
-The mock paid API (`examples/mock_paid_api.py`) remains available for quick end-to-end smoke tests.
-- `auto` — end-to-end helper that signs the guarantee locally, replays the resource request with the
-  generated `X-PAYMENT` header, and optionally submits `/verify`/`/settle` for diagnostics.
-- `supported`, `health` — quick facilitator diagnostics.
-
-You can pair the client with `examples/mock_paid_api.py`, a FastAPI server that simulates a
-paywalled endpoint. Start it with `python examples/mock_paid_api.py` (set `PORT` to override the
+You can pair the client with `examples/server/mock_paid_api.py`, a FastAPI server that simulates a
+paywalled endpoint. Start it with `python examples/server/mock_paid_api.py` (set `PORT` to override the
 default `9000`). The mock resource will call the facilitator’s `/verify` endpoint (defaulting to
-`http://localhost:8080`; override with `FACILITATOR_URL`) whenever it receives an `X-PAYMENT`
-header. With both services running you can execute
-`python examples/x402_facilitator_client.py discover --resource-url http://localhost:9000/protected`
-to see the mock `paymentRequirements` payload.
-
-Run `python examples/x402_facilitator_client.py --help` inside a virtualenv with
-`pip install -r examples/requirements.txt` for full usage details.
+`https://x402.4mica.xyz/`; override with `FACILITATOR_URL`) whenever it receives an `X-PAYMENT`
+header.
 
 ## Migrate from x402
 
@@ -279,14 +263,14 @@ The facilitator can transparently replace the EIP-3009/x402 debit flow. The key 
 2. **Provision tabs before issuing requirements** – whenever a user shares their wallet, call
    `POST https://x402.4mica.xyz/tabs` with `{ userAddress, recipientAddress, erc20Token?, ttlSeconds? }`.
    Cache `{ tabId, assetAddress, startTimestamp, ttlSeconds }` and reuse that tab per
-   `(user, recipient, asset)` pair.
+   `(user, recipient, asset)` combination.
 3. **Emit credit-flavoured `paymentRequirements`** – embed the latest tab metadata and switch the
    identifying strings:
 
    ```jsonc
    {
      "scheme": "4mica-credit",
-     "network": "sepolia-mainnet",
+     "network": "sepolia-testnet",
      "maxAmountRequired": "<decimal or 0x amount>",
      "resource": "/your/resource",
      "description": "Describe the protected work",
@@ -295,31 +279,31 @@ The facilitator can transparently replace the EIP-3009/x402 debit flow. The key 
      "maxTimeoutSeconds": 300,
      "asset": "<assetAddress>",
      "extra": {
-       "tabId": "<tabId>",
-       "userAddress": "<user wallet>",
+       "tabEndpoint": "<tabEndpoint>",
        "...other metadata you already add..."
      }
    }
    ```
 
-   The facilitator enforces that `scheme`, `network`, `payTo`, `asset`, `tabId`, and `userAddress`
+   The facilitator enforces that `scheme`, `network`, `payTo` and `asset`
    match the tab exactly, so keep them synchronized.
+
 4. **Expect credit certificates during settlement** – `/verify` still performs structural checks and
-   `/settle` now returns `{ success, networkId: "sepolia-mainnet", certificate: { claims, signature } }`.
+   `/settle` now returns `{ success, networkId: "sepolia-testnet", certificate: { claims, signature } }`.
    Persist the certificate if you need to downstream claim remuneration via 4mica core.
 
 ### Changes clients (payers) must make
 
-Payers sign guarantees instead of EIP-3009 transfers. Use the official SDK located at
-`~/4mica-core/sdk` (crate name `rust-sdk-4mica`) to manage collateral and produce signatures.
+Payers sign guarantees instead of EIP-3009 transfers. Use the official SDK `rust-sdk-4mica` to manage collateral and produce signatures.
 
 1. **Install the SDK** – inside your agent crate run
 
    ```bash
-   cargo add rust-sdk-4mica --path ~/4mica-core/sdk
+   cargo add rust-sdk-4mica
    ```
 
    or add the same entry manually to `Cargo.toml`.
+
 2. **Configure the client** – create a `Client` with the payer’s signing key. The SDK pulls the
    remaining parameters (domain separator, operator key, etc.) from `X402_CORE_API_URL`.
 
@@ -359,8 +343,7 @@ Payers sign guarantees instead of EIP-3009 transfers. Use the official SDK locat
    ```
 
 5. **Build the `X-PAYMENT` header** – wrap `{ x402Version: 1, scheme: "4mica-credit", network:
-   "sepolia-mainnet", payload: { claims, signature, signingScheme: "eip712" } }` into base64 (see
-   `examples/x402_facilitator_client.py::compose_payment_header`) and send it alongside the retrying
+"sepolia-testnet", payload: { claims, signature, scheme: "eip712" } }` into base64 (see `examples/x402_flow.rs`) and send it alongside the retrying
    HTTP request.
 6. **Settle your tabs** – every tab response includes `ttlSeconds`, which is the settlement window in
    seconds from `startTimestamp`. Recipients should call `/settle` (and issue the guarantee) before

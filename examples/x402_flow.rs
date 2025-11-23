@@ -46,6 +46,23 @@ async fn request_server_and_fetch_payment_requirements(
     }
 }
 
+async fn request_server_with_payment_header(
+    resource_url: &str,
+    payment_header: &str,
+) -> anyhow::Result<serde_json::Value> {
+    let client = reqwest::Client::new();
+    let response = client
+        .get(resource_url)
+        .header("X-PAYMENT", payment_header)
+        .send()
+        .await
+        .context("failed to send request")?;
+    response
+        .json()
+        .await
+        .context("failed to parse JSON response")
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     load_env_files();
@@ -128,6 +145,10 @@ async fn main() -> Result<()> {
     }
 
     println!("X-PAYMENT header:\n{}\n", payment.header);
+
+    println!("Requesting resource server with X-PAYMENT header...");
+    let response = request_server_with_payment_header(&resource_url, &payment.header).await?;
+    println!("Response from resource server:\n{:#?}", response);
 
     Ok(())
 }
