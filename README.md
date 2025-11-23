@@ -95,6 +95,32 @@ x402-4mica and the 4mica core service.
 - Call `/settle` once the resource work is ready to complete; persist the returned certificate as
   proof that 4mica extended credit for the specified amount.
 
+## Swapping from x402-rs to the 4mica facilitator
+
+If you already run a standard x402 resource server (for example from `~/x402-rs`), you can point it
+at the 4mica facilitator with minimal changes:
+
+- **Server config** – change the facilitator base URL your resource uses for `/tabs`, `/verify`, and
+  `/settle` to the 4mica endpoint (for example `https://x402.4mica.xyz/` or your own deployment).
+- **Scheme/network** – advertise `scheme = "4mica-credit"` and a `network` that exists in the
+  facilitator’s `/supported` response (configure via `X402_NETWORKS` / `X402_NETWORK` when you run
+  the service). Keep using the same `(scheme, network)` in your `paymentRequirements` and in the
+  client header.
+- **Tabs are required** – keep issuing tabs by POSTing `/tabs` with `{ userAddress, recipientAddress,
+  erc20Token?, ttlSeconds? }`. Reuse cached tabs until they expire; put `tabId` and `userAddress` in
+  `paymentRequirements.extra`.
+- **Strict amount matching** – the 4mica flow requires the signed `claims.amount` to equal
+  `paymentRequirements.maxAmountRequired` exactly (no partial spends). Set `maxAmountRequired`
+  accordingly and reject reused headers server-side as you would with x402-rs.
+- **Client behavior (EIP-712)** – clients still sign locally and send `X-PAYMENT` with the retry.
+  Use `rust-sdk-4mica` to build the header: create a `Client` with your payer key, then
+  `X402Flow::new(client)?` and call `sign_payment(payment_requirements, user_address)` (default
+  `signingScheme = eip712`). Attach `payment.header` as `X-PAYMENT`. No facilitator calls are made
+  from the client; only the resource server talks to the facilitator for verify and settle.
+- **What you get back** – `/settle` returns a BLS certificate (`certificate.claims` and
+  `certificate.signature`) instead of (or in addition to) an on-chain tx hash. Store that certificate
+  if you need proof of issued credit.
+
 ## HTTP API
 
 - `GET /supported` – returns all `(scheme, network)` tuples the facilitator can service (4mica and,
