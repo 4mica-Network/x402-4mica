@@ -3,8 +3,9 @@ use std::io::ErrorKind;
 
 use anyhow::{Context, Result};
 use dotenvy::from_filename;
-use rust_sdk_4mica::{Client, ConfigBuilder, PaymentRequest, U256, X402Flow};
-use serde_json::to_string_pretty;
+use reqwest::StatusCode;
+use rust_sdk_4mica::{Client, ConfigBuilder, U256, X402Flow, x402::PaymentRequirements};
+use serde::Deserialize;
 
 fn load_env_files() {
     for path in ["examples/.env", ".env"] {
@@ -20,14 +21,29 @@ fn env_var(key: &str) -> Result<String> {
     env::var(key).with_context(|| format!("missing env {key}"))
 }
 
-fn parse_u256(raw: &str) -> Result<U256> {
-    let trimmed = raw.trim();
-    let value = if let Some(rest) = trimmed.strip_prefix("0x") {
-        U256::from_str_radix(rest, 16)
+async fn request_server_and_fetch_payment_requirements(
+    resource_url: &str,
+) -> anyhow::Result<PaymentRequirements> {
+    #[derive(Debug, Clone, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct ResourceResponse {
+        pub accepts: Vec<PaymentRequirements>,
+    }
+
+    let response = reqwest::get(resource_url).await?;
+
+    if response.status() == StatusCode::PAYMENT_REQUIRED {
+        let body: ResourceResponse = response.json().await?;
+        body.accepts
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("No payment requirements found"))
     } else {
-        U256::from_str_radix(trimmed, 10)
-    };
-    value.with_context(|| format!("invalid number: {raw}"))
+        Err(anyhow::anyhow!(
+            "Expected 402 status, got {}",
+            response.status()
+        ))
+    }
 }
 
 #[tokio::main]
@@ -37,14 +53,11 @@ async fn main() -> Result<()> {
     let payer_key = env_var("PAYER_KEY")?;
     let user_address = env_var("USER_ADDRESS")?;
     let resource_url = env_var("RESOURCE_URL")?;
-    let method = env::var("RESOURCE_METHOD").unwrap_or_else(|_| "GET".into());
-    let facilitator_url =
-        env::var("FACILITATOR_URL").unwrap_or_else(|_| "http://localhost:8080/".into());
     let asset_address = env_var("ASSET_ADDRESS")?;
 
     println!("--- x402 / 4mica flow ---");
     println!("1) Discover 402 + accepted requirements from the resource");
-    println!("2) Request tab (if required) and sign claims locally");
+    println!("2) Request tab and sign claims locally");
     println!(
         "3) Retry the resource with X-PAYMENT using the header below (server will handle verify/settle)\n"
     );
@@ -81,49 +94,40 @@ async fn main() -> Result<()> {
     //     hex::encode(deposit_receipt.transaction_hash)
     // );
 
-    let flow =
-        X402Flow::with_base_url(core, &facilitator_url).context("invalid facilitator url")?;
-    let request = PaymentRequest::new(resource_url, user_address).with_method_str(&method)?;
+    // Request payment requirements from the resource server
+    let payment_requirements = request_server_and_fetch_payment_requirements(&resource_url).await?;
+
+    let flow = X402Flow::new(core)?;
 
     // Prepare the payment requirements and signature. The resource server will call
     // /verify and /settle; the client only needs to attach the X-PAYMENT header.
-    let prepared = flow
-        .prepare_payment(request)
+    let payment = flow
+        .sign_payment(payment_requirements, user_address)
         .await
         .context("failed to prepare payment")?;
 
-    let payment_asset = &prepared.requirements.asset;
+    let payment_asset = &payment.claims.asset_address;
     println!("Payment asset address: {payment_asset}");
-    println!("Payment tabId: {}", prepared.requirements.extra["tabId"]);
+    println!("Payment tabId: {:#x}", payment.claims.tab_id);
 
     // Sanity checks against the desired USDC flow.
     if !payment_asset.eq_ignore_ascii_case(&asset_address) {
         eprintln!(
-            "warning: paymentRequirements.asset ({payment_asset}) does not match ASSET_ADDRESS ({asset_address})"
+            "warning: claims.asset_address ({payment_asset}) does not match ASSET_ADDRESS ({asset_address})"
         );
     }
 
-    let required_amount_raw = &prepared.requirements.max_amount_required;
-    if let Ok(required_amount) = parse_u256(required_amount_raw) {
-        // Expect 0.0001 units (100 base units) if your resource advertises that price.
-        let expected = U256::from(100u64);
-        if required_amount != expected {
-            eprintln!(
-                "warning: paymentRequirements.maxAmountRequired is {} (expected 100 base units)",
-                required_amount
-            );
-        }
-    } else {
+    // Expect 0.0001 units (100 base units) if your resource advertises that price.
+    let expected_amount = U256::from(100u64);
+    let actual_amount = payment.claims.amount;
+    if actual_amount != expected_amount {
         eprintln!(
-            "warning: could not parse maxAmountRequired={} for sanity check",
-            required_amount_raw
+            "warning: claims.amount is {} (expected 100 base units)",
+            actual_amount
         );
     }
-    println!("X-PAYMENT header:\n{}\n", prepared.header());
-    println!(
-        "Facilitator /verify body (server will call):\n{}",
-        to_string_pretty(prepared.verify_body())?
-    );
+
+    println!("X-PAYMENT header:\n{}\n", payment.header);
 
     Ok(())
 }

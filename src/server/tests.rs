@@ -492,6 +492,7 @@ fn encoded_header() -> String {
             "network": "sepolia-mainnet",
             "payload": {
                     "claims": {
+                        "version": "v1",
                         "user_address": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
                         "recipient_address": recipient,
                         "tab_id": "0x1",
@@ -500,7 +501,7 @@ fn encoded_header() -> String {
                         "timestamp": 1
                     },
                 "signature": "0x1111",
-                "signingScheme": "eip712"
+                "scheme": "eip712"
             }
         })
         .to_string(),
@@ -793,8 +794,8 @@ impl MockIssuer {
 impl GuaranteeIssuer for MockIssuer {
     async fn issue(
         &self,
-        _claims: &rust_sdk_4mica::PaymentGuaranteeRequestClaims,
-        _signature: &str,
+        _claims: rpc::PaymentGuaranteeRequestClaims,
+        _signature: String,
         _scheme: rust_sdk_4mica::SigningScheme,
     ) -> Result<BLSCert, String> {
         self.issue_calls.fetch_add(1, Ordering::SeqCst);

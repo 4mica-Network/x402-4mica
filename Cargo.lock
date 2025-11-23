@@ -1131,9 +1131,9 @@ checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
 name = "axum"
-version = "0.8.6"
+version = "0.8.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a18ed336352031311f4e0b4dd2ff392d4fbb370777c9d18d7fc9d7359f73871"
+checksum = "5b098575ebe77cb6d14fc7f32749631a6e44edbef6b796f89b020e99ba20d425"
 dependencies = [
  "axum-core",
  "axum-macros",
@@ -1826,18 +1826,6 @@ name = "crunchy"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
-
-[[package]]
-name = "crypto-4mica"
-version = "0.3.1"
-dependencies = [
- "alloy",
- "anyhow",
- "bls-signatures",
- "blst",
- "hex",
- "serde",
-]
 
 [[package]]
 name = "crypto-4mica"
@@ -4662,11 +4650,13 @@ dependencies = [
 [[package]]
 name = "rpc-4mica"
 version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2099367deb3e9368d378ba89dacc556c612e156e78a92dc134dd9b5c7d76fe94"
 dependencies = [
  "alloy-primitives",
  "alloy-sol-types",
  "anyhow",
- "crypto-4mica 0.3.1",
+ "crypto-4mica",
  "reqwest",
  "serde",
  "serde_json",
@@ -4710,13 +4700,15 @@ checksum = "48fd7bd8a6377e15ad9d42a8ec25371b94ddc67abe7c8b9127bec79bebaaae18"
 
 [[package]]
 name = "rust-sdk-4mica"
-version = "0.3.1"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "79f4e2dafd8794f563419495443bac3e9be6a364b927236f7f1ad5fdf5d66100"
 dependencies = [
  "alloy",
  "anyhow",
  "async-trait",
  "base64 0.22.1",
- "crypto-4mica 0.3.1",
+ "crypto-4mica",
  "log",
  "reqwest",
  "rpc-4mica",
@@ -8996,10 +8988,11 @@ dependencies = [
  "async-trait",
  "axum",
  "base64 0.22.1",
- "crypto-4mica 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "crypto-4mica",
  "dotenvy",
  "hex",
  "reqwest",
+ "rpc-4mica",
  "rust-sdk-4mica",
  "serde",
  "serde_json",
