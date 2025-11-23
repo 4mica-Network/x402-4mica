@@ -27,6 +27,7 @@ import json
 import os
 import time
 import logging
+from urllib.parse import urljoin, urlparse
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence, Tuple, Union
 
@@ -103,6 +104,23 @@ def _config_value(
         f"Missing configuration for {joined}. Provide it via environment or {ENV_PATH}."
     )
 
+
+def _tab_endpoint_url() -> str:
+    override = _config_value("TAB_ENDPOINT_URL", required=False)
+    if override:
+        return override
+
+    resource_url = _config_value(
+        "RESOURCE_URL",
+        required=False,
+        default="http://localhost:9000/protected",
+    )
+    parsed = urlparse(resource_url)
+    if parsed.scheme and parsed.netloc:
+        base = f"{parsed.scheme}://{parsed.netloc}"
+        return urljoin(base, "/tab")
+
+    return "http://localhost:9000/tab"
 
 
 def _normalize_address(value: str, *, field: str) -> str:
@@ -229,6 +247,7 @@ def _extract_error_from_response(response: Optional[requests.Response]) -> str:
 
 
 def _build_payment_requirements(user_address: str) -> JsonDict:
+    tab_endpoint_url = _tab_endpoint_url()
     recipient_address = _normalize_address(
         _config_value("RECIPIENT_ADDRESS"),
         field="RECIPIENT_ADDRESS",
@@ -280,6 +299,7 @@ def _build_payment_requirements(user_address: str) -> JsonDict:
             "tabId": tab_id,
             "userAddress": user_address,
             "startTimestamp": str(start_ts),
+            "tabEndpoint": tab_endpoint_url,
         },
     }
 
@@ -287,6 +307,7 @@ def _build_payment_requirements(user_address: str) -> JsonDict:
 
 
 def _requirements_template() -> JsonDict:
+    tab_endpoint_url = _tab_endpoint_url()
     recipient_address = _normalize_address(
         _config_value("RECIPIENT_ADDRESS"),
         field="RECIPIENT_ADDRESS",
@@ -312,7 +333,9 @@ def _requirements_template() -> JsonDict:
         "asset": configured_asset,
         "description": description,
         "resource": resource_name,
-        "extra": None,
+        "extra": {
+            "tabEndpoint": tab_endpoint_url,
+        },
     }
     return template
 
@@ -454,7 +477,7 @@ def create_app() -> FastAPI:
         default=DEFAULT_FACILITATOR_URL,
     )
     template_requirements = _requirements_template()
-    tab_endpoint = "/tab"
+    tab_endpoint = _tab_endpoint_url()
 
     def _clone_requirements(requirements: JsonDict) -> JsonDict:
         return json.loads(json.dumps(requirements))
@@ -516,6 +539,7 @@ def create_app() -> FastAPI:
             response_body = {
                 "error": "guarantee required",
                 "paymentRequirementsTemplate": template_requirements,
+                "accepts": [template_requirements],
                 "tabEndpoint": tab_endpoint,
                 "hint": "Send POST /tab with { userAddress } to mint payment requirements for your wallet.",
             }
@@ -528,6 +552,7 @@ def create_app() -> FastAPI:
                 "error": "invalid guarantee header",
                 "hint": "Unable to extract user address; request a tab and retry.",
                 "tabEndpoint": tab_endpoint,
+                "accepts": [template_requirements],
             }
             return JSONResponse(response_body, status_code=status.HTTP_402_PAYMENT_REQUIRED)
 
@@ -538,6 +563,8 @@ def create_app() -> FastAPI:
                 "error": "tab required",
                 "hint": "Call POST /tab with your wallet to receive paymentRequirements.",
                 "tabEndpoint": tab_endpoint,
+                "paymentRequirementsTemplate": template_requirements,
+                "accepts": [template_requirements],
             }
             return JSONResponse(response_body, status_code=status.HTTP_402_PAYMENT_REQUIRED)
 
@@ -617,6 +644,7 @@ def create_app() -> FastAPI:
             "error": "guarantee verification failed",
             "paymentRequirements": requirements,
             "tabEndpoint": tab_endpoint,
+            "accepts": [requirements],
         }
         if failure_reason:
             response_body["hint"] = failure_reason

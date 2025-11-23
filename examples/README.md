@@ -35,8 +35,6 @@ Environment variables (loaded from `examples/.env` and then `.env`):
 PAYER_KEY=0x...           # payer's private key used to sign the guarantee
 USER_ADDRESS=0x...        # payer's address to place in the guarantee claims
 RESOURCE_URL=http://localhost:9000/protected
-RESOURCE_METHOD=GET       # optional, defaults to GET
-FACILITATOR_URL=http://localhost:8080/  # optional, defaults to localhost
 ASSET_ADDRESS=0x...       # asset used for tab funding and guarantees
 ```
 
@@ -44,3 +42,8 @@ Run from the repo root for debugging:
 ```
 cargo run --example facilitator_rust
 ```
+
+Notes that reflect the current example code:
+- The helper always issues a GET to `RESOURCE_URL`; `RESOURCE_METHOD` is ignored.
+- `FACILITATOR_URL` is not wired; the SDK defaults are used.
+- It emits a warning if the signed `claims.amount` is not 100 base units (0.0001).
