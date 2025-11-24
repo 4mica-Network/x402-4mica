@@ -1,6 +1,6 @@
 # x402-4mica Examples
 
-Quick-start references that follow the standard x402 flow (as in `~/x402`): the client only talks to the resource server, while the server calls the facilitator for `/tabs`, `/verify`, and `/settle`. Users never interact with the facilitator or 4mica Core directly.
+Quick-start references that follow the standard x402 flow:  the client only talks to the resource server, while the server calls the facilitator for `/tabs`, `/verify`, and `/settle`. Users never interact with the facilitator or 4mica Core directly.
 
 ## Server-driven mock paid API (`mock_paid_api.py`)
 
