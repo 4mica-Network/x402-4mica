@@ -24,7 +24,7 @@ uvicorn mock_paid_api:app --reload --port 9000 --factory
 
 Flow to exercise end-to-end:
 
-- GET `/protected` without X-PAYMENT to receive a 402 with `paymentRequirementsTemplate` and `tabEndpoint` `/tab`.
+- GET `/protected` without X-PAYMENT to receive a 402 with `paymentRequirements` and `tabEndpoint` `/tab`.
 - POST `/tab` with `{ "userAddress": "<wallet>" }`; the server calls the facilitator `/tabs` and returns concrete `paymentRequirements` for that wallet.
 - Sign the requirements with your wallet to produce `X-PAYMENT` (no facilitator calls from the client).
 - Retry GET `/protected` with `X-PAYMENT: <header>`; the server calls the facilitator `/verify` **and** `/settle` and returns the paid content plus the facilitator responses.

@@ -538,7 +538,7 @@ def create_app() -> FastAPI:
         if x_payment is None:
             response_body = {
                 "error": "guarantee required",
-                "paymentRequirementsTemplate": template_requirements,
+                "paymentRequirements": template_requirements,
                 "accepts": [template_requirements],
                 "tabEndpoint": tab_endpoint,
                 "hint": "Send POST /tab with { userAddress } to mint payment requirements for your wallet.",
@@ -563,7 +563,7 @@ def create_app() -> FastAPI:
                 "error": "tab required",
                 "hint": "Call POST /tab with your wallet to receive paymentRequirements.",
                 "tabEndpoint": tab_endpoint,
-                "paymentRequirementsTemplate": template_requirements,
+                "paymentRequirements": template_requirements,
                 "accepts": [template_requirements],
             }
             return JSONResponse(response_body, status_code=status.HTTP_402_PAYMENT_REQUIRED)
