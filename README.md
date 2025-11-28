@@ -4,7 +4,7 @@ A facilitator for the x402 protocol that runs the 4mica credit flow. Resource se
 open tabs, validate `X-PAYMENT` headers against their `paymentRequirements`, and settle by returning
 the BLS certificate to the recipient.
 
-## How to use the system
+## How to use 4Mica facilitator
 
 ### Quick integration (resource servers)
 
@@ -12,12 +12,6 @@ the BLS certificate to the recipient.
 - Implement the tab endpoint to accept `{ userAddress, paymentRequirements }`. For each call, open or reuse a tab by calling the facilitator’s standard `POST /tabs` with `{ userAddress, recipientAddress = payTo, erc20Token = asset, ttlSeconds? }`, then return the tab response (at least `tabId` and `userAddress`) to the client. Cache tabs per (user, recipient, asset) if you want to avoid unnecessary `/tabs` calls – the facilitator will return the existing tab for that combination either way.
 - Clients combine this tab with your original `paymentRequirements` to build and sign a guarantee, producing a base64-encoded `X-PAYMENT` header that they send on the retried request for the protected resource. You never construct this header yourself; you only need to validate and consume it.
 - When a request arrives with `X-PAYMENT`, base64-decode the header into the standard x402 payment envelope and send its payment payload together with the original `paymentRequirements` to the facilitator’s `/verify` and `/settle` endpoints. Use `/verify` as an optional preflight check before doing work, and `/settle` once you are ready to accept credit and obtain the BLS certificate for downstream remuneration.
-
-You can pair the client with `examples/server/mock_paid_api.py`, a FastAPI server that simulates a
-paywalled endpoint. Start it with `python examples/server/mock_paid_api.py` (set `PORT` to override
-the default `9000`). The mock resource will call the facilitator’s `/verify` endpoint (defaulting to
-`https://x402.4mica.xyz/`; override with `FACILITATOR_URL`) whenever it receives an `X-PAYMENT`
-header.
 
 ### Quick integration (clients)
 
@@ -48,14 +42,20 @@ header.
   `X402Flow::sign_payment(requirements, user_address)` to obtain the same `payment.header` for the
   retry request.
 
-### Rust client example
+### Demo example
+
+You can pair the client with `examples/server/mock_paid_api.py`, a FastAPI server that simulates a
+paywalled endpoint. Start it with `python examples/server/mock_paid_api.py` (set `PORT` to override
+the default `9000`). The mock resource will call the facilitator’s `/verify` endpoint (defaulting to
+`https://x402.4mica.xyz/`; override with `FACILITATOR_URL`) whenever it receives an `X-PAYMENT`
+header.
 
 The bundled Rust example shows how to sign a payment
 header with `rust-sdk-4mica`:
 
 ```bash
 # requires PAYER_KEY, USER_ADDRESS, RESOURCE_URL and ASSET_ADDRESS
-cargo run --example x402_flow -- verify http://localhost:8080/
+cargo run --example x402_flow
 ```
 
 The example will read environment variables from `examples/.env` (or a root `.env`) if present.
