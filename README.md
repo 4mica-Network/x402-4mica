@@ -1,7 +1,13 @@
 # x402-4mica Facilitator
 
-[![CI](https://github.com/4mica/x402-4mica/actions/workflows/ci.yml/badge.svg)](https://github.com/4mica/x402-4mica/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+<p align="center">
+  <a href="https://github.com/4mica-network/x402-4mica/actions/workflows/ci.yml">
+    <img src="https://github.com/4mica-network/x402-4mica/actions/workflows/ci.yml/badge.svg" alt="CI">
+  </a>
+  <a href="LICENSE">
+    <img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License: MIT">
+  </a>
+</p>
 
 A facilitator for the x402 protocol that runs the 4mica credit flow. Resource servers call it to
 open tabs, validate `X-PAYMENT` headers against their `paymentRequirements`, and settle by returning
