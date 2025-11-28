@@ -1,10 +1,19 @@
 # x402-4mica Facilitator
 
+[![CI](https://github.com/4mica/x402-4mica/actions/workflows/ci.yml/badge.svg)](https://github.com/4mica/x402-4mica/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+
 A facilitator for the x402 protocol that runs the 4mica credit flow. Resource servers call it to
 open tabs, validate `X-PAYMENT` headers against their `paymentRequirements`, and settle by returning
 the BLS certificate to the recipient.
 
-## How to use 4Mica facilitator
+
+**Contents**
+- [How to use the system](#how-to-use-the-system)
+- [Integrate from x402](#integrate-from-x402)
+- [Run your own facilitator](#run-your-own-facilitator)
+
+## How to use the system
 
 ### Quick integration (resource servers)
 
