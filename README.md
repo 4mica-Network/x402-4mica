@@ -30,27 +30,29 @@ the BLS certificate to the recipient.
 
 ### Quick integration (clients)
 
-- Python SDK (local path `py-sdk-4mica`):
+- Python SDK:
 
   ```bash
-  pip install sdk-4mica==0.1.0
+  pip install sdk-4mica
   ```
 
   ```python
-  from fourmica import Client, SigningScheme
+  import asyncio
+  from fourmica_sdk import Client, ConfigBuilder, SigningScheme, X402Flow
 
   payer_key = "0x..."             # wallet private key
+  user_address = "0x..."          # address to embed in the claims
   requirements = fetch_requirements_somehow()  # includes tabId/userAddress/payTo/asset/maxAmountRequired
 
-  client = Client(
-      payer_private_key=payer_key,
-      core_api_url="https://api.4mica.xyz/",
-  )
-  payment = client.sign_payment(
-      payment_requirements=requirements,
-      signing_scheme=SigningScheme.EIP712,
-  )
-  headers = {"X-PAYMENT": payment.header}  # base64 string to send with the retry
+  async def main():
+      cfg = ConfigBuilder().wallet_private_key(payer_key).rpc_url("https://api.4mica.xyz/").build()
+      client = await Client.new(cfg)
+      flow = X402Flow.from_client(client)
+      payment = await flow.sign_payment(requirements, user_address)
+      headers = {"X-PAYMENT": payment.header}  # base64 string to send with the retry
+      await client.aclose()
+
+  asyncio.run(main())
   ```
 
 - Rust SDK: `cargo add rust-sdk-4mica` and call
@@ -70,10 +72,12 @@ header with `rust-sdk-4mica`:
 
 ```bash
 # requires PAYER_KEY, USER_ADDRESS, RESOURCE_URL and ASSET_ADDRESS
-cargo run --example x402_flow
+cargo run --example rust_client
 ```
 
-The example will read environment variables from `examples/.env` (or a root `.env`) if present.
+The example will read environment variables from `examples/.env` (or a root `.env`) if present. A
+Python counterpart lives in `examples/python_client/client.py` (install deps with `pip install -r
+examples/python_client/requirements.txt`).
 
 ### X-PAYMENT header schema
 
@@ -271,7 +275,8 @@ Payers sign guarantees instead of EIP-3009 transfers. Use the official SDK `rust
    ```
 
 5. **Build the `X-PAYMENT` header** – wrap `{ x402Version: 1, scheme: "4mica-credit", network:
-"polygon-amoy", payload: { claims, signature, scheme: "eip712" } }` into base64 (see `examples/x402_flow.rs`) and send it alongside the retrying
+"polygon-amoy", payload: { claims, signature, scheme: "eip712" } }` into base64 (see
+`examples/rust_client/main.rs` or `examples/python_client/client.py`) and send it alongside the retrying
    HTTP request.
 6. **Settle your tabs** – every tab response includes `ttlSeconds`, which is the settlement window in
    seconds from `startTimestamp`. Recipients should call `/settle` (and issue the guarantee) before

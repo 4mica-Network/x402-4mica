@@ -1,6 +1,12 @@
 # x402-4mica Examples
 
-Quick-start references that follow the standard x402 flow:  the client only talks to the resource server, while the server calls the facilitator for `/tabs`, `/verify`, and `/settle`. Users never interact with the facilitator or 4mica Core directly.
+Quick-start references that follow the standard x402 flow: the client only talks to the resource server, while the server calls the facilitator for `/tabs`, `/verify`, and `/settle`. Users never interact with the facilitator or 4mica Core directly.
+
+## Layout
+
+- `server/` – mock FastAPI paywall that issues requirements and settles payments.
+- `rust_client/` – Rust helper that discovers requirements, signs headers, and retries the resource.
+- `python_client/` – Python helper that mirrors the Rust flow using the SDK.
 
 ## Server-driven mock paid API (`mock_paid_api.py`)
 
@@ -29,7 +35,7 @@ Flow to exercise end-to-end:
 - Sign the requirements with your wallet to produce `X-PAYMENT` (no facilitator calls from the client).
 - Retry GET `/protected` with `X-PAYMENT: <header>`; the server calls the facilitator `/verify` **and** `/settle` and returns the paid content plus the facilitator responses.
 
-## Rust helper (`x402_flow.rs`)
+## Rust helper (`examples/rust_client`)
 
 An optional diagnostics tool for operators to prepare headers with `rust-sdk-4mica` (not part of the user-facing x402 flow). It discovers requirements, requests tabs, signs the X-PAYMENT header and retries the resource request with the payment header.
 
@@ -45,5 +51,30 @@ ASSET_ADDRESS=0x...       # asset used for tab funding and guarantees
 Run from the repo root for debugging:
 
 ```
-cargo run --example x402_flow
+cargo run --example rust_client
+```
+
+## Python helper (`examples/python_client`)
+
+Matches the Rust helper using the asyncio Python SDK (`fourmica_sdk`). Install dependencies in a virtualenv:
+
+```
+cd examples/python_client
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+Environment variables (loaded from `examples/.env` and then `.env`):
+
+```
+PAYER_KEY=0x...           # payer's private key used to sign the guarantee
+USER_ADDRESS=0x...        # payer's address to place in the guarantee claims
+RESOURCE_URL=http://localhost:9000/protected
+ASSET_ADDRESS=0x...       # optional sanity check for claims.asset_address
+```
+
+Run from the repo root or inside `examples/python_client`:
+
+```
+python examples/python_client/client.py
 ```
