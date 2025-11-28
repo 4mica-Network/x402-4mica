@@ -38,16 +38,20 @@ the BLS certificate to the recipient.
 
   ```python
   import asyncio
-  from fourmica_sdk import Client, ConfigBuilder, SigningScheme, X402Flow
+  from fourmica_sdk import Client, ConfigBuilder, PaymentRequirements, X402Flow
 
-  payer_key = "0x..."             # wallet private key
-  user_address = "0x..."          # address to embed in the claims
-  requirements = fetch_requirements_somehow()  # includes tabId/userAddress/payTo/asset/maxAmountRequired
+  payer_key = "0x..."    # wallet private key
+  user_address = "0x..." # address to embed in the claims
 
   async def main():
       cfg = ConfigBuilder().wallet_private_key(payer_key).rpc_url("https://api.4mica.xyz/").build()
       client = await Client.new(cfg)
       flow = X402Flow.from_client(client)
+
+      # Fetch the recipient's paymentRequirements (must include extra.tabEndpoint)
+      req_raw = fetch_requirements_somehow()[0]
+      requirements = PaymentRequirements.from_raw(req_raw)
+
       payment = await flow.sign_payment(requirements, user_address)
       headers = {"X-PAYMENT": payment.header}  # base64 string to send with the retry
       await client.aclose()
