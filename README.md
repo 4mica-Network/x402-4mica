@@ -1,10 +1,8 @@
 # x402-4mica Facilitator
 
-An Axum-based facilitator that speaks the x402 protocol while orchestrating 4mica credit
-guarantees. The service is **stateless**: it never stores recipient wallets or pushes on-chain
-transactions. It accepts signed guarantee claims from clients, checks them against the resource
-server’s `paymentRequirements`, and, on settlement, asks the 4mica core service to mint and verify a
-BLS certificate before returning it to the recipient.
+A facilitator for the x402 protocol that runs the 4mica credit flow. Resource servers call it to
+open tabs, validate `X-PAYMENT` headers against their `paymentRequirements`, and settle by returning
+the BLS certificate to the recipient.
 
 ## Quick integration (resource servers)
 
@@ -17,6 +15,32 @@ BLS certificate before returning it to the recipient.
    `network`.
 4. On retries, forward `X-PAYMENT` to `/verify` first; call `/settle` once work is ready and persist
    the returned certificate.
+
+## Quick integration (clients)
+
+- Python SDK (local path `py-sdk-4mica`):
+  ```bash
+  pip install sdk-4mica==0.1.0
+  ```
+  ```python
+  from fourmica import Client, SigningScheme
+
+  payer_key = "0x..."             # wallet private key
+  requirements = fetch_requirements_somehow()  # includes tabId/userAddress/payTo/asset/maxAmountRequired
+
+  client = Client(
+      payer_private_key=payer_key,
+      core_api_url="https://api.4mica.xyz/",
+  )
+  payment = client.sign_payment(
+      payment_requirements=requirements,
+      signing_scheme=SigningScheme.EIP712,
+  )
+  headers = {"X-PAYMENT": payment.header}  # base64 string to send with the retry
+  ```
+- Rust SDK: `cargo add rust-sdk-4mica` and call
+  `X402Flow::sign_payment(requirements, user_address)` to obtain the same `payment.header` for the
+  retry request.
 
 ## Configuration
 
