@@ -6,22 +6,22 @@ the BLS certificate to the recipient.
 
 ## Quick integration (resource servers)
 
-1. Configure the facilitator URL in your paywall (for example `https://x402.4mica.xyz/`).
-2. When a user shares their wallet, call `POST /tabs` with
-   `{ userAddress, recipientAddress, erc20Token?, ttlSeconds? }` and cache the returned tab per
-   `(user, recipient, asset)`.
-3. Issue `paymentRequirements` that copy the tab’s `tabId` and `userAddress`, plus your
-   `payTo`/`maxAmountRequired`/`asset`. Advertise `scheme = "4mica-credit"` and a supported
-   `network`.
-4. On retries, forward `X-PAYMENT` to `/verify` first; call `/settle` once work is ready and persist
-   the returned certificate.
+- Configure the 4mica facilitator (for example `https://x402.4mica.xyz/`) and choose a POST tab endpoint on your API (e.g. `POST https://api.example.com/x402/tab`). Your `402 Payment Required` responses should advertise `scheme = "4mica-credit"`, a supported `network`, and set `payTo` / `asset` / `maxAmountRequired`, embedding your tab endpoint in `paymentRequirements.extra.tabEndpoint`.
+
+- Implement the tab endpoint to accept `{ userAddress, paymentRequirements }`. For each call, open or reuse a tab by calling the facilitator’s standard `POST /tabs` with `{ userAddress, recipientAddress = payTo, erc20Token = asset, ttlSeconds? }`, then return the tab response (at least `tabId` and `userAddress`) to the client. Cache tabs per (user, recipient, asset) if you want to avoid unnecessary `/tabs` calls – the facilitator will return the existing tab for that combination either way.
+
+- Clients combine this tab with your original `paymentRequirements` to build and sign a guarantee, producing a base64-encoded `X-PAYMENT` header that they send on the retried request for the protected resource. You never construct this header yourself; you only need to validate and consume it.
+
+- When a request arrives with `X-PAYMENT`, base64-decode the header into the standard x402 payment envelope and send its payment payload together with the original `paymentRequirements` to the facilitator’s `/verify` and `/settle` endpoints. Use `/verify` as an optional preflight check before doing work, and `/settle` once you are ready to accept credit and obtain the BLS certificate for downstream remuneration.
 
 ## Quick integration (clients)
 
 - Python SDK (local path `py-sdk-4mica`):
+
   ```bash
   pip install sdk-4mica==0.1.0
   ```
+
   ```python
   from fourmica import Client, SigningScheme
 
@@ -38,6 +38,7 @@ the BLS certificate to the recipient.
   )
   headers = {"X-PAYMENT": payment.header}  # base64 string to send with the retry
   ```
+
 - Rust SDK: `cargo add rust-sdk-4mica` and call
   `X402Flow::sign_payment(requirements, user_address)` to obtain the same `payment.header` for the
   retry request.
