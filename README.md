@@ -52,9 +52,9 @@ export HOST=0.0.0.0
 export PORT=8080
 export X402_SCHEME=4mica-credit
 # List of supported networks (JSON). Each entry must include `{ "network", "coreApiUrl" }`.
-export X402_NETWORKS='[{"network":"sepolia-testnet","coreApiUrl":"https://api.4mica.xyz/"}]'
+export X402_NETWORKS='[{"network":"polygon-amoy","coreApiUrl":"https://api.4mica.xyz/"}]'
 # Legacy single-network fallback if X402_NETWORKS is unset
-export X402_NETWORK=sepolia-testnet
+export X402_NETWORK=polygon-amoy
 
 # 4mica public API – used to fetch operator parameters
 export X402_CORE_API_URL=https://api.4mica.xyz/
@@ -135,7 +135,7 @@ The facilitator can transparently replace the EIP-3009/x402 debit flow. The key 
    ```jsonc
    {
      "scheme": "4mica-credit",
-     "network": "sepolia-testnet",
+     "network": "polygon-amoy",
      "maxAmountRequired": "<decimal or 0x amount>",
      "resource": "/your/resource",
      "description": "Describe the protected work",
@@ -154,7 +154,7 @@ The facilitator can transparently replace the EIP-3009/x402 debit flow. The key 
    match the tab exactly, so keep them synchronized.
 
 4. **Expect credit certificates during settlement** – `/verify` still performs structural checks and
-   `/settle` now returns `{ success, networkId: "sepolia-testnet", certificate: { claims, signature } }`.
+   `/settle` now returns `{ success, networkId: "polygon-amoy", certificate: { claims, signature } }`.
    Persist the certificate if you need to downstream claim remuneration via 4mica core.
 
 ### Changes clients (payers) must make
@@ -208,7 +208,7 @@ Payers sign guarantees instead of EIP-3009 transfers. Use the official SDK `rust
    ```
 
 5. **Build the `X-PAYMENT` header** – wrap `{ x402Version: 1, scheme: "4mica-credit", network:
-"sepolia-testnet", payload: { claims, signature, scheme: "eip712" } }` into base64 (see `examples/x402_flow.rs`) and send it alongside the retrying
+"polygon-amoy", payload: { claims, signature, scheme: "eip712" } }` into base64 (see `examples/x402_flow.rs`) and send it alongside the retrying
    HTTP request.
 6. **Settle your tabs** – every tab response includes `ttlSeconds`, which is the settlement window in
    seconds from `startTimestamp`. Recipients should call `/settle` (and issue the guarantee) before
@@ -275,7 +275,7 @@ facilitator from `x402-rs`, exposing those `(scheme, network)` pairs on `/suppor
 {
   "x402Version": 1,
   "scheme": "4mica-credit",
-  "network": "sepolia-testnet",
+  "network": "polygon-amoy",
   "payload": {
     "claims": {
       "user_address": "<0x-prefixed checksum string>",
