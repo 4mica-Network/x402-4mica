@@ -476,12 +476,11 @@ impl TabService for CoreTabService {
         let payload = CoreCreateTabRequest {
             user_address: request.user_address.clone(),
             recipient_address: request.recipient_address.clone(),
-            asset_address: asset_address.clone(),
             erc20_token: Some(asset_address.clone()),
             ttl: request.ttl_seconds,
         };
 
-        let result: CoreCreateTabResponse = self.post("core/payment-tabs", &payload).await?;
+        let result: CoreCreateTabResponse = self.post("core/tabs", &payload).await?;
         let tab_id = canonical_u256(&result.id);
         let asset_address = match result.asset_address.clone() {
             Some(value) => value,
@@ -531,7 +530,7 @@ impl CoreTabService {
     }
 
     async fn fetch_tab_asset(&self, tab_id: &str) -> Result<Option<String>, TabError> {
-        let path = format!("core/payment-tabs/{tab_id}");
+        let path = format!("core/tabs/{tab_id}");
         let tab: Option<CoreTabInfo> = self.get(&path).await?;
         Ok(tab.map(|t| t.asset_address))
     }
@@ -768,7 +767,6 @@ pub enum TabError {
 struct CoreCreateTabRequest {
     user_address: String,
     recipient_address: String,
-    asset_address: String,
     erc20_token: Option<String>,
     ttl: Option<u64>,
 }
