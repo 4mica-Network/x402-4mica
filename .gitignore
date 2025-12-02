@@ -104,3 +104,12 @@ dmypy.json
 # Misc
 .DS_Store
 Thumbs.db
+
+# ------------------------
+# JavaScript / TypeScript
+# ------------------------
+node_modules/
+*.tsbuildinfo
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*

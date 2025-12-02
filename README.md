@@ -59,6 +59,31 @@ the BLS certificate to the recipient.
   asyncio.run(main())
   ```
 
+- TypeScript SDK:
+
+  ```bash
+  npm install sdk-4mica
+  ```
+
+  ```ts
+  import { Client, ConfigBuilder, PaymentRequirements, X402Flow } from "sdk-4mica";
+
+  async function run() {
+    const cfg = new ConfigBuilder().walletPrivateKey("0x...").build();
+    const client = await Client.new(cfg);
+    const flow = X402Flow.fromClient(client);
+
+    const reqRaw = fetchRequirementsSomehow()[0]; // includes extra.tabEndpoint
+    const requirements = PaymentRequirements.fromRaw(reqRaw);
+
+    const payment = await flow.signPayment(requirements, "0xUser");
+    const headers = { "X-PAYMENT": payment.header };
+    await client.aclose();
+  }
+
+  run();
+  ```
+
 - Rust SDK: `cargo add rust-sdk-4mica` and call
   `X402Flow::sign_payment(requirements, user_address)` to obtain the same `payment.header` for the
   retry request.
@@ -81,7 +106,8 @@ cargo run --example rust_client
 
 The example will read environment variables from `examples/.env` (or a root `.env`) if present. A
 Python counterpart lives in `examples/python_client/client.py` (install deps with `pip install -r
-examples/python_client/requirements.txt`).
+examples/python_client/requirements.txt`). A TypeScript version lives in `examples/ts_client`
+(`npm install && npm start`).
 
 ### X-PAYMENT header schema
 
@@ -153,7 +179,7 @@ x402-4mica and the 4mica core service.
      `{ userAddress, erc20Token?, ttlSeconds? }`.
    - Recipient → Facilitator: `POST /tabs` using the supplied body. The facilitator will reuse the
      existing tab for that `(user, recipient, asset)` combination or create a fresh one.
-   - Facilitator → 4mica core: `POST core/payment-tabs` whenever a new tab is required.
+   - Facilitator → 4mica core: `POST core/tabs` whenever a new tab is required.
    - Facilitator → Recipient: `{ tabId, userAddress, recipientAddress, assetAddress, startTimestamp, ttlSeconds }`.
      Recipients cache this tab and reuse it until expiry, then hand `tabId`/`userAddress` back to
      the client inside `paymentRequirements`.
@@ -376,7 +402,7 @@ keeping custody, settlement, and tab management under your own infrastructure.
   fetch the operator’s BLS public key, domain separator, and API base URL. Those values are kept in
   memory and reused for all later requests.
 - **Tab provisioning (`POST /tabs`)** – recipients can ask the facilitator to open a payment tab on
-  their behalf. The facilitator relays the request to `core/payment-tabs`, converts the 4mica
+  their behalf. The facilitator relays the request to `core/tabs`, converts the 4mica
   response into a plain JSON payload, and hands the tab metadata back to the resource server.
 - **Verification (`POST /verify`)** – recipients send the base64 `X-PAYMENT` header plus the
   `paymentRequirements` they issued to the client. The facilitator decodes the header, validates the

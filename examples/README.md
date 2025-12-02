@@ -7,6 +7,7 @@ Quick-start references that follow the standard x402 flow: the client only talks
 - `server/` – mock FastAPI paywall that issues requirements and settles payments.
 - `rust_client/` – Rust helper that discovers requirements, signs headers, and retries the resource.
 - `python_client/` – Python helper that mirrors the Rust flow using the SDK.
+- `ts_client/` – TypeScript helper using the npm `sdk-4mica` package.
 
 ## Server-driven mock paid API (`mock_paid_api.py`)
 
@@ -77,4 +78,32 @@ Run from the repo root or inside `examples/python_client`:
 
 ```
 python examples/python_client/client.py
+```
+
+## TypeScript helper (`examples/ts_client`)
+
+Matches the Rust/Python helpers using the TypeScript SDK (`sdk-4mica`). Requires Node 18+ (built-in
+`fetch`).
+
+Install dependencies:
+
+```
+cd examples/ts_client
+npm install
+```
+
+Environment variables (loaded from `examples/.env` and then `.env`):
+
+```
+PAYER_KEY=0x...           # payer's private key used to sign the guarantee
+USER_ADDRESS=0x...        # payer's address to place in the guarantee claims
+RESOURCE_URL=http://localhost:9000/protected
+ASSET_ADDRESS=0x...       # optional sanity check for claims.asset_address
+```
+
+Run from the repo root or inside `examples/ts_client`:
+
+```
+npm start
+# or: npx ts-node client.ts
 ```

@@ -1,0 +1,17 @@
+{
+  "name": "ts-client-example",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "start": "ts-node client.ts"
+  },
+  "dependencies": {
+    "dotenv": "^17.2.3",
+    "sdk-4mica": "0.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.5"
+  }
+}
