@@ -216,7 +216,6 @@ async fn tabs_endpoint_returns_response_from_service() {
         user_address: "0xabc".into(),
         recipient_address: "0xdef".into(),
         asset_address: "0xeee".into(),
-        erc20_token: Some("0xeee".into()),
         start_timestamp: 123,
         ttl_seconds: 60,
     };

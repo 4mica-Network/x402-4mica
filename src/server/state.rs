@@ -450,23 +450,6 @@ impl CoreTabService {
             Err(TabError::Upstream { status, message })
         }
     }
-
-    async fn get<Resp>(&self, path: &str) -> Result<Resp, TabError>
-    where
-        Resp: for<'de> Deserialize<'de>,
-    {
-        let url = self.url(path)?;
-        let response = self
-            .client
-            .get(url)
-            .send()
-            .await
-            .map_err(|err| TabError::Upstream {
-                status: StatusCode::BAD_GATEWAY,
-                message: err.to_string(),
-            })?;
-        Self::decode_response(response).await
-    }
 }
 
 #[async_trait]
@@ -482,21 +465,11 @@ impl TabService for CoreTabService {
 
         let result: CoreCreateTabResponse = self.post("core/tabs", &payload).await?;
         let tab_id = canonical_u256(&result.id);
-        let asset_address = match result.asset_address.clone() {
-            Some(value) => value,
-            None => match self.fetch_tab_asset(&tab_id).await {
-                Ok(Some(asset)) => asset,
-                Ok(None) => asset_address.clone(),
-                Err(err) => {
-                    tracing::warn!(%err, "failed to fetch tab asset from core; falling back to configured/requested asset");
-                    asset_address.clone()
-                }
-            },
-        };
-        let erc20_token = result
+        let asset_address = result
             .erc20_token
             .clone()
-            .or_else(|| Some(asset_address.clone()));
+            .or(result.asset_address.clone())
+            .unwrap_or_else(|| asset_address.clone());
         let start_timestamp = current_timestamp();
         let ttl_seconds = request
             .ttl_seconds
@@ -508,7 +481,6 @@ impl TabService for CoreTabService {
             user_address: request.user_address.clone(),
             recipient_address: request.recipient_address.clone(),
             asset_address: asset_address.clone(),
-            erc20_token,
             start_timestamp,
             ttl_seconds,
         })
@@ -527,12 +499,6 @@ impl CoreTabService {
                 TabError::Invalid("erc20Token is required (or set ASSET_ADDRESS env)".into())
             })?;
         Ok(value.to_string())
-    }
-
-    async fn fetch_tab_asset(&self, tab_id: &str) -> Result<Option<String>, TabError> {
-        let path = format!("core/tabs/{tab_id}");
-        let tab: Option<CoreTabInfo> = self.get(&path).await?;
-        Ok(tab.map(|t| t.asset_address))
     }
 }
 
@@ -619,8 +585,6 @@ pub struct CreateTabResponse {
     pub user_address: String,
     pub recipient_address: String,
     pub asset_address: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub erc20_token: Option<String>,
     pub start_timestamp: i64,
     pub ttl_seconds: i64,
 }
@@ -779,10 +743,4 @@ struct CoreCreateTabResponse {
     asset_address: Option<String>,
     #[serde(default)]
     erc20_token: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct CoreTabInfo {
-    #[serde(alias = "asset_address", alias = "assetAddress")]
-    asset_address: String,
 }
