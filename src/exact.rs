@@ -50,6 +50,71 @@ fn convert_supported(
         .collect()
 }
 
+fn convert_requirements(
+    req: &PaymentRequirements,
+) -> Result<XPaymentRequirements, ValidationError> {
+    use serde_json::{Map, Value as JsonValue};
+
+    let mut map = Map::new();
+    map.insert("scheme".into(), JsonValue::String(req.scheme.clone()));
+    map.insert("network".into(), JsonValue::String(req.network.clone()));
+    map.insert(
+        "maxAmountRequired".into(),
+        JsonValue::String(req.max_amount_required.clone()),
+    );
+    if let Some(resource) = &req.resource {
+        map.insert("resource".into(), JsonValue::String(resource.clone()));
+    }
+    if let Some(description) = &req.description {
+        map.insert("description".into(), JsonValue::String(description.clone()));
+    }
+    if let Some(mime) = &req.mime_type {
+        map.insert("mimeType".into(), JsonValue::String(mime.clone()));
+    }
+    if let Some(schema) = &req.output_schema {
+        map.insert("outputSchema".into(), schema.clone());
+    }
+    map.insert("payTo".into(), JsonValue::String(req.pay_to.clone()));
+    map.insert(
+        "maxTimeoutSeconds".into(),
+        JsonValue::Number(req.max_timeout_seconds.unwrap_or_default().into()),
+    );
+    map.insert("asset".into(), JsonValue::String(req.asset.clone()));
+    if let Some(extra) = &req.extra {
+        map.insert("extra".into(), extra.clone());
+    }
+
+    serde_json::from_value(JsonValue::Object(map)).map_err(|err| {
+        ValidationError::InvalidRequirements(format!(
+            "failed to parse paymentRequirements for exact scheme: {err}"
+        ))
+    })
+}
+
+fn convert_verify_request(request: &VerifyRequest) -> Result<XVerifyRequest, ValidationError> {
+    let version = X402Version::try_from(request.x402_version)
+        .map_err(|_| ValidationError::UnsupportedVersion(request.x402_version))?;
+
+    let payload = PaymentPayload::try_from(Base64Bytes::from(request.payment_header.as_bytes()))
+        .map_err(|err| ValidationError::InvalidHeader(err.to_string()))?;
+
+    let payment_requirements = convert_requirements(&request.payment_requirements)?;
+
+    Ok(XVerifyRequest {
+        x402_version: version,
+        payment_payload: payload,
+        payment_requirements,
+    })
+}
+
+fn convert_settle_request(request: &SettleRequest) -> Result<XSettleRequest, ValidationError> {
+    convert_verify_request(&VerifyRequest {
+        x402_version: request.x402_version,
+        payment_header: request.payment_header.clone(),
+        payment_requirements: request.payment_requirements.clone(),
+    })
+}
+
 pub async fn try_from_env() -> anyhow::Result<Option<Arc<dyn ExactService>>> {
     if let Some(remote) = HttpExactService::from_env()? {
         info!(url = %remote.base_url, "using remote debit facilitator");
@@ -90,72 +155,6 @@ impl LocalExactService {
         }))
     }
 
-    fn convert_requirements(
-        req: &PaymentRequirements,
-    ) -> Result<XPaymentRequirements, ValidationError> {
-        use serde_json::{Map, Value as JsonValue};
-
-        let mut map = Map::new();
-        map.insert("scheme".into(), JsonValue::String(req.scheme.clone()));
-        map.insert("network".into(), JsonValue::String(req.network.clone()));
-        map.insert(
-            "maxAmountRequired".into(),
-            JsonValue::String(req.max_amount_required.clone()),
-        );
-        if let Some(resource) = &req.resource {
-            map.insert("resource".into(), JsonValue::String(resource.clone()));
-        }
-        if let Some(description) = &req.description {
-            map.insert("description".into(), JsonValue::String(description.clone()));
-        }
-        if let Some(mime) = &req.mime_type {
-            map.insert("mimeType".into(), JsonValue::String(mime.clone()));
-        }
-        if let Some(schema) = &req.output_schema {
-            map.insert("outputSchema".into(), schema.clone());
-        }
-        map.insert("payTo".into(), JsonValue::String(req.pay_to.clone()));
-        map.insert(
-            "maxTimeoutSeconds".into(),
-            JsonValue::Number(req.max_timeout_seconds.unwrap_or_default().into()),
-        );
-        map.insert("asset".into(), JsonValue::String(req.asset.clone()));
-        if let Some(extra) = &req.extra {
-            map.insert("extra".into(), extra.clone());
-        }
-
-        serde_json::from_value(JsonValue::Object(map)).map_err(|err| {
-            ValidationError::InvalidRequirements(format!(
-                "failed to parse paymentRequirements for exact scheme: {err}"
-            ))
-        })
-    }
-
-    fn convert_verify_request(request: &VerifyRequest) -> Result<XVerifyRequest, ValidationError> {
-        let version = X402Version::try_from(request.x402_version)
-            .map_err(|_| ValidationError::UnsupportedVersion(request.x402_version))?;
-
-        let payload =
-            PaymentPayload::try_from(Base64Bytes::from(request.payment_header.as_bytes()))
-                .map_err(|err| ValidationError::InvalidHeader(err.to_string()))?;
-
-        let payment_requirements = Self::convert_requirements(&request.payment_requirements)?;
-
-        Ok(XVerifyRequest {
-            x402_version: version,
-            payment_payload: payload,
-            payment_requirements,
-        })
-    }
-
-    fn convert_settle_request(request: &SettleRequest) -> Result<XSettleRequest, ValidationError> {
-        Self::convert_verify_request(&VerifyRequest {
-            x402_version: request.x402_version,
-            payment_header: request.payment_header.clone(),
-            payment_requirements: request.payment_requirements.clone(),
-        })
-    }
-
     fn convert_verify_response(response: XVerifyResponse) -> VerifyResponse {
         match response {
             XVerifyResponse::Valid { .. } => VerifyResponse {
@@ -186,7 +185,7 @@ impl LocalExactService {
 #[async_trait]
 impl ExactService for LocalExactService {
     async fn verify(&self, request: &VerifyRequest) -> Result<VerifyResponse, ValidationError> {
-        let converted = Self::convert_verify_request(request)?;
+        let converted = convert_verify_request(request)?;
         let result = self
             .inner
             .verify(&converted)
@@ -196,7 +195,7 @@ impl ExactService for LocalExactService {
     }
 
     async fn settle(&self, request: &SettleRequest) -> Result<SettleResponse, ValidationError> {
-        let converted = Self::convert_settle_request(request)?;
+        let converted = convert_settle_request(request)?;
         let result = self
             .inner
             .settle(&converted)
@@ -304,11 +303,13 @@ impl HttpExactService {
 #[async_trait]
 impl ExactService for HttpExactService {
     async fn verify(&self, request: &VerifyRequest) -> Result<VerifyResponse, ValidationError> {
-        self.post("verify", request).await
+        let converted = convert_verify_request(request)?;
+        self.post("verify", &converted).await
     }
 
     async fn settle(&self, request: &SettleRequest) -> Result<SettleResponse, ValidationError> {
-        self.post("settle", request).await
+        let converted = convert_settle_request(request)?;
+        self.post("settle", &converted).await
     }
 
     async fn supported(&self) -> Result<Vec<SupportedKind>, ValidationError> {
