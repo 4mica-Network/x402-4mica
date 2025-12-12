@@ -230,7 +230,15 @@ impl HttpExactService {
             .with_context(|| format!("failed to parse {source}"))?;
 
         Ok(Some(Self {
-            client: Client::new(),
+            client: reqwest::Client::builder()
+                .user_agent(format!("x402-4mica/{}", env!("CARGO_PKG_VERSION")))
+                .default_headers({
+                    let mut h = reqwest::header::HeaderMap::new();
+                    h.insert(reqwest::header::ACCEPT, "application/json".parse().unwrap());
+                    h
+                })
+                .build()
+                .context("failed to build reqwest client")?,
             base_url,
         }))
     }
