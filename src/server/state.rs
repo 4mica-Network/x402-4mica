@@ -16,6 +16,7 @@ use rust_sdk_4mica::{Address, BLSCert, U256, x402::X402PaymentEnvelope};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
+use tracing::error;
 
 use crate::issuer::{GuaranteeIssuer, parse_error_message};
 use crate::verifier::CertificateValidator;
@@ -424,10 +425,12 @@ impl CoreTabService {
             .json(payload)
             .send()
             .await
+            .inspect_err(|err| error!(reason = %err, "failed to POST to tab service"))
             .map_err(|err| TabError::Upstream {
                 status: StatusCode::BAD_GATEWAY,
                 message: err.to_string(),
             })?;
+
         Self::decode_response(response).await
     }
 
@@ -463,7 +466,7 @@ impl TabService for CoreTabService {
             ttl: request.ttl_seconds,
         };
 
-        let result: CoreCreateTabResponse = self.post("core/tabs", &payload).await?;
+        let result: CoreCreateTabResponse = self.post("core/payment-tabs", &payload).await?;
         let tab_id = canonical_u256(&result.id);
         let asset_address = result
             .erc20_token
