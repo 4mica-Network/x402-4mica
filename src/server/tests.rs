@@ -218,6 +218,7 @@ async fn tabs_endpoint_returns_response_from_service() {
         asset_address: "0xeee".into(),
         start_timestamp: 123,
         ttl_seconds: 60,
+        next_req_id: "0x0".into(),
     };
     let service = Arc::new(MockTabService::success(tab_response.clone()));
     let state = Arc::new(AppState::new(
@@ -241,6 +242,7 @@ async fn tabs_endpoint_returns_response_from_service() {
     let payload: CreateTabResponse = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload.tab_id, "0x1");
     assert_eq!(payload.start_timestamp, 123);
+    assert_eq!(payload.next_req_id, "0x0");
 }
 
 #[tokio::test]
@@ -495,6 +497,7 @@ fn encoded_header() -> String {
                         "user_address": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
                         "recipient_address": recipient,
                         "tab_id": "0x1",
+                        "req_id": "0x0",
                         "amount": "10",
                         "asset_address": asset,
                         "timestamp": 1

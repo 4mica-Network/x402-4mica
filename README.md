@@ -150,9 +150,10 @@ The facilitator enforces that:
 - `POST /tabs`
   - Request: `{ "userAddress", "recipientAddress", "erc20Token"?, "ttlSeconds"? }`.
     Use `erc20Token = null` (or omit it) for ETH tabs; otherwise pass the token contract address.
-  - Response: `{ "tabId", "userAddress", "recipientAddress", "assetAddress", "startTimestamp", "ttlSeconds" }`.
+  - Response: `{ "tabId", "userAddress", "recipientAddress", "assetAddress", "startTimestamp", "ttlSeconds", "nextReqId" }`.
     `tabId` is always emitted as a canonical hex string. Recipients call this after a user shares
     their wallet; the facilitator reuses the existing tab for that pair whenever possible.
+    `nextReqId` is the next sequential request id to include when signing a guarantee.
 - `POST /verify`
   - Request: `{ "x402Version": 1, "paymentHeader": "<base64 X-PAYMENT>", "paymentRequirements": { ... } }`.
   - Response: `{ "isValid": true|false, "invalidReason"?, "certificate": null }`.
@@ -180,9 +181,9 @@ x402-4mica and the 4mica core service.
    - Recipient → Facilitator: `POST /tabs` using the supplied body. The facilitator will reuse the
      existing tab for that `(user, recipient, asset)` combination or create a fresh one.
    - Facilitator → 4mica core: `POST core/tabs` whenever a new tab is required.
-   - Facilitator → Recipient: `{ tabId, userAddress, recipientAddress, assetAddress, startTimestamp, ttlSeconds }`.
+   - Facilitator → Recipient: `{ tabId, userAddress, recipientAddress, assetAddress, startTimestamp, ttlSeconds, nextReqId }`.
      Recipients cache this tab and reuse it until expiry, then hand `tabId`/`userAddress` back to
-     the client inside `paymentRequirements`.
+     the client inside `paymentRequirements` along with the latest `nextReqId`.
 3. **Client signs a guarantee**
    - Client builds the JSON payload that matches the resource requirements, signs it with their
      private key (EIP‑712 by default; EIP‑191 is also accepted), and wraps the result in a base64
@@ -283,7 +284,8 @@ Payers sign guarantees instead of EIP-3009 transfers. Use the official SDK `rust
    `client.user.deposit(...)` (or `approve_erc20` + `deposit` for tokens). Refer to the SDK README
    for concrete examples.
 4. **Sign guarantee claims** – derive `PaymentGuaranteeClaims` from the recipient’s
-   `paymentRequirements` (copy `tabId`, `userAddress`, `payTo`, `asset`, and the desired `amount`),
+   `paymentRequirements` (copy `tabId`, `userAddress`, `payTo`, `asset`, the desired `amount`, and
+   the most recent `nextReqId`),
    choose a signing scheme (usually `SigningScheme::Eip712`), and call `client.user.sign_payment`.
 
    ```rust
@@ -293,10 +295,11 @@ Payers sign guarantees instead of EIP-3009 transfers. Use the official SDK `rust
        user_address: payer_wallet.clone(),
        recipient_address: pay_to.clone(),
        tab_id: tab_id_u256,
+       // next_req_id should come from the /tabs response (nextReqId), parsed to U256.
+       req_id: next_req_id,
        amount: U256::from(amount_wei),
        asset_address: asset.clone(),
        timestamp: chrono::Utc::now().timestamp() as u64,
-       req_id: U256::from(rand::random::<u64>()),
    };
    let signature = client
        .user

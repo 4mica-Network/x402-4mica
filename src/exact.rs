@@ -231,6 +231,7 @@ impl HttpExactService {
 
         Ok(Some(Self {
             client: reqwest::Client::builder()
+                .no_proxy()
                 .user_agent(format!("x402-4mica/{}", env!("CARGO_PKG_VERSION")))
                 .default_headers({
                     let mut h = reqwest::header::HeaderMap::new();

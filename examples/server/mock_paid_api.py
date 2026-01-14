@@ -203,6 +203,7 @@ def _ensure_payment_tab(
     tab_id = data.get("tabId")
     if tab_id is None:
         raise RuntimeError("Facilitator response missing tabId.")
+    next_req_id = data.get("nextReqId") or data.get("next_req_id") or data.get("reqId")
 
     def _parse_int(value: Any, *, field: str, default: int) -> int:
         if value is None:
@@ -228,6 +229,7 @@ def _ensure_payment_tab(
         "asset_address": data.get("assetAddress"),
         "start_timestamp": start_timestamp,
         "ttl_seconds": ttl_value,
+        "next_req_id": str(next_req_id) if next_req_id is not None else None,
     }
     _TAB_STATE[user_address] = tab_state
     return dict(tab_state)
@@ -302,6 +304,9 @@ def _build_payment_requirements(user_address: str) -> JsonDict:
             "tabEndpoint": tab_endpoint_url,
         },
     }
+    next_req_id = tab_data.get("next_req_id")
+    if next_req_id is not None:
+        requirements["extra"]["nextReqId"] = str(next_req_id)
 
     return requirements
 
@@ -527,6 +532,8 @@ def create_app() -> FastAPI:
         }
         if extra.get("startTimestamp"):
             response_body["startTimestamp"] = extra["startTimestamp"]
+        if extra.get("nextReqId"):
+            response_body["nextReqId"] = extra["nextReqId"]
         response_body["userAddress"] = user_address
         return JSONResponse(response_body)
 

@@ -373,6 +373,7 @@ impl FourMicaHandler {
         issued: &PaymentGuaranteeClaims,
     ) -> Result<(), ValidationError> {
         if issued.tab_id != request.tab_id
+            || issued.req_id != request.req_id
             || issued.amount != request.amount
             || issued.recipient_address != request.recipient_address
             || issued.asset_address != request.asset_address
@@ -468,6 +469,7 @@ impl TabService for CoreTabService {
 
         let result: CoreCreateTabResponse = self.post("core/payment-tabs", &payload).await?;
         let tab_id = canonical_u256(&result.id);
+        let next_req_id = canonical_u256(&result.next_req_id.unwrap_or(U256::ZERO));
         let asset_address = result
             .erc20_token
             .clone()
@@ -486,6 +488,7 @@ impl TabService for CoreTabService {
             asset_address: asset_address.clone(),
             start_timestamp,
             ttl_seconds,
+            next_req_id,
         })
     }
 }
@@ -590,6 +593,7 @@ pub struct CreateTabResponse {
     pub asset_address: String,
     pub start_timestamp: i64,
     pub ttl_seconds: i64,
+    pub next_req_id: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -746,4 +750,7 @@ struct CoreCreateTabResponse {
     asset_address: Option<String>,
     #[serde(default)]
     erc20_token: Option<String>,
+    #[serde(default)]
+    #[serde(alias = "nextReqId", alias = "reqId")]
+    next_req_id: Option<U256>,
 }
