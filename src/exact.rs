@@ -4,15 +4,13 @@ use anyhow::Context;
 use async_trait::async_trait;
 use reqwest::{Client, Url};
 use tracing::{info, warn};
+use x402_rs::chain::ChainRegistry;
+use x402_rs::config::Config as X402Config;
 use x402_rs::facilitator::Facilitator;
 use x402_rs::facilitator_local::FacilitatorLocal;
-use x402_rs::provider_cache::{ProviderCache, ProviderMap};
-use x402_rs::types::{
-    Base64Bytes, PaymentPayload, PaymentRequirements as XPaymentRequirements,
-    SettleRequest as XSettleRequest, SettleResponse as XSettleResponse, SupportedPaymentKind,
-    SupportedPaymentKindsResponse, VerifyRequest as XVerifyRequest,
-    VerifyResponse as XVerifyResponse, X402Version,
-};
+use x402_rs::proto::{self, SupportedPaymentKind};
+use x402_rs::scheme::{SchemeBlueprints, SchemeRegistry};
+use x402_rs::util::Base64Bytes;
 
 use crate::server::state::{
     ExactService, PaymentRequirements, SettleRequest, SettleResponse, SupportedKind,
@@ -20,28 +18,19 @@ use crate::server::state::{
 };
 
 const ENV_DEBIT_URL: &str = "X402_DEBIT_URL";
+const ENV_CONFIG_PATH: &str = "X402_CONFIG_PATH";
 
 fn convert_supported_kind(kind: SupportedPaymentKind) -> Result<SupportedKind, ValidationError> {
-    let extra = kind
-        .extra
-        .map(|value| {
-            serde_json::to_value(value).map_err(|err| ValidationError::Exact(err.to_string()))
-        })
-        .transpose()?;
-    let x402_version = match kind.x402_version {
-        X402Version::V1 => 1,
-    };
-
     Ok(SupportedKind {
-        scheme: kind.scheme.to_string(),
+        scheme: kind.scheme,
         network: kind.network,
-        x402_version: Some(x402_version),
-        extra,
+        x402_version: Some(kind.x402_version),
+        extra: kind.extra,
     })
 }
 
 fn convert_supported(
-    response: SupportedPaymentKindsResponse,
+    response: proto::SupportedResponse,
 ) -> Result<Vec<SupportedKind>, ValidationError> {
     response
         .kinds
@@ -50,9 +39,7 @@ fn convert_supported(
         .collect()
 }
 
-fn convert_requirements(
-    req: &PaymentRequirements,
-) -> Result<XPaymentRequirements, ValidationError> {
+fn convert_requirements(req: &PaymentRequirements) -> serde_json::Value {
     use serde_json::{Map, Value as JsonValue};
 
     let mut map = Map::new();
@@ -62,15 +49,18 @@ fn convert_requirements(
         "maxAmountRequired".into(),
         JsonValue::String(req.max_amount_required.clone()),
     );
-    if let Some(resource) = &req.resource {
-        map.insert("resource".into(), JsonValue::String(resource.clone()));
-    }
-    if let Some(description) = &req.description {
-        map.insert("description".into(), JsonValue::String(description.clone()));
-    }
-    if let Some(mime) = &req.mime_type {
-        map.insert("mimeType".into(), JsonValue::String(mime.clone()));
-    }
+    map.insert(
+        "resource".into(),
+        JsonValue::String(req.resource.clone().unwrap_or_default()),
+    );
+    map.insert(
+        "description".into(),
+        JsonValue::String(req.description.clone().unwrap_or_default()),
+    );
+    map.insert(
+        "mimeType".into(),
+        JsonValue::String(req.mime_type.clone().unwrap_or_default()),
+    );
     if let Some(schema) = &req.output_schema {
         map.insert("outputSchema".into(), schema.clone());
     }
@@ -84,30 +74,42 @@ fn convert_requirements(
         map.insert("extra".into(), extra.clone());
     }
 
-    serde_json::from_value(JsonValue::Object(map)).map_err(|err| {
-        ValidationError::InvalidRequirements(format!(
-            "failed to parse paymentRequirements for exact scheme: {err}"
-        ))
-    })
+    JsonValue::Object(map)
 }
 
-fn convert_verify_request(request: &VerifyRequest) -> Result<XVerifyRequest, ValidationError> {
-    let version = X402Version::try_from(request.x402_version)
-        .map_err(|_| ValidationError::UnsupportedVersion(request.x402_version))?;
-
-    let payload = PaymentPayload::try_from(Base64Bytes::from(request.payment_header.as_bytes()))
+fn decode_payment_payload(header: &str) -> Result<serde_json::Value, ValidationError> {
+    let bytes = Base64Bytes::from(header.as_bytes())
+        .decode()
         .map_err(|err| ValidationError::InvalidHeader(err.to_string()))?;
-
-    let payment_requirements = convert_requirements(&request.payment_requirements)?;
-
-    Ok(XVerifyRequest {
-        x402_version: version,
-        payment_payload: payload,
-        payment_requirements,
-    })
+    serde_json::from_slice(&bytes).map_err(|err| ValidationError::InvalidHeader(err.to_string()))
 }
 
-fn convert_settle_request(request: &SettleRequest) -> Result<XSettleRequest, ValidationError> {
+fn convert_verify_request(
+    request: &VerifyRequest,
+) -> Result<proto::VerifyRequest, ValidationError> {
+    use serde_json::{Map, Value as JsonValue};
+
+    if request.x402_version != 1 {
+        return Err(ValidationError::UnsupportedVersion(request.x402_version));
+    }
+
+    let payload = decode_payment_payload(&request.payment_header)?;
+    let payment_requirements = convert_requirements(&request.payment_requirements);
+
+    let mut map = Map::new();
+    map.insert(
+        "x402Version".into(),
+        JsonValue::Number(serde_json::Number::from(request.x402_version as u64)),
+    );
+    map.insert("paymentPayload".into(), payload);
+    map.insert("paymentRequirements".into(), payment_requirements);
+
+    Ok(proto::VerifyRequest::from(JsonValue::Object(map)))
+}
+
+fn convert_settle_request(
+    request: &SettleRequest,
+) -> Result<proto::SettleRequest, ValidationError> {
     convert_verify_request(&VerifyRequest {
         x402_version: request.x402_version,
         payment_header: request.payment_header.clone(),
@@ -132,53 +134,71 @@ pub async fn try_from_env() -> anyhow::Result<Option<Arc<dyn ExactService>>> {
 }
 
 struct LocalExactService {
-    inner: Arc<FacilitatorLocal<ProviderCache>>,
+    inner: Arc<FacilitatorLocal<SchemeRegistry>>,
 }
 
 impl LocalExactService {
     pub async fn try_from_env() -> anyhow::Result<Option<Self>> {
-        let cache = match ProviderCache::from_env().await {
-            Ok(cache) => cache,
+        let config = load_x402_config()?;
+        if config.chains().is_empty() || config.schemes().is_empty() {
+            return Ok(None);
+        }
+
+        let chain_registry = match ChainRegistry::from_config(config.chains()).await {
+            Ok(registry) => registry,
             Err(err) => {
                 warn!(reason = %err, "failed to initialize exact facilitator from environment");
                 return Ok(None);
             }
         };
 
-        if cache.values().next().is_none() {
+        let scheme_registry =
+            SchemeRegistry::build(chain_registry, SchemeBlueprints::full(), config.schemes());
+        if scheme_registry.values().next().is_none() {
             return Ok(None);
         }
 
-        let facilitator = FacilitatorLocal::new(cache);
+        let facilitator = FacilitatorLocal::new(scheme_registry);
         Ok(Some(Self {
             inner: Arc::new(facilitator),
         }))
     }
 
-    fn convert_verify_response(response: XVerifyResponse) -> VerifyResponse {
-        match response {
-            XVerifyResponse::Valid { .. } => VerifyResponse {
+    fn convert_verify_response(
+        response: proto::VerifyResponse,
+    ) -> Result<VerifyResponse, ValidationError> {
+        let response = x402_rs::proto::v1::VerifyResponse::try_from(response)
+            .map_err(|err| ValidationError::Exact(err.to_string()))?;
+        Ok(match response {
+            x402_rs::proto::v1::VerifyResponse::Valid { .. } => VerifyResponse {
                 is_valid: true,
                 invalid_reason: None,
                 certificate: None,
             },
-            XVerifyResponse::Invalid { reason, .. } => VerifyResponse {
+            x402_rs::proto::v1::VerifyResponse::Invalid { reason, .. } => VerifyResponse {
                 is_valid: false,
                 invalid_reason: Some(reason.to_string()),
                 certificate: None,
             },
-        }
+        })
     }
 
-    fn convert_settle_response(response: XSettleResponse) -> SettleResponse {
-        let tx_hash = response.transaction.map(|hash| format!("{}", hash));
-        let error = response.error_reason.map(|reason| reason.to_string());
-        SettleResponse::from_exact(
-            response.success,
-            error,
-            tx_hash,
-            response.network.to_string(),
-        )
+    fn convert_settle_response(
+        response: proto::SettleResponse,
+    ) -> Result<SettleResponse, ValidationError> {
+        let response: x402_rs::proto::v1::SettleResponse = serde_json::from_value(response.0)
+            .map_err(|err| ValidationError::Exact(err.to_string()))?;
+        let (success, error, tx_hash, network) = match response {
+            x402_rs::proto::v1::SettleResponse::Success {
+                transaction,
+                network,
+                ..
+            } => (true, None, Some(transaction), network),
+            x402_rs::proto::v1::SettleResponse::Error { reason, network } => {
+                (false, Some(reason), None, network)
+            }
+        };
+        Ok(SettleResponse::from_exact(success, error, tx_hash, network))
     }
 }
 
@@ -191,7 +211,7 @@ impl ExactService for LocalExactService {
             .verify(&converted)
             .await
             .map_err(|err| ValidationError::Exact(err.to_string()))?;
-        Ok(Self::convert_verify_response(result))
+        Self::convert_verify_response(result)
     }
 
     async fn settle(&self, request: &SettleRequest) -> Result<SettleResponse, ValidationError> {
@@ -201,7 +221,7 @@ impl ExactService for LocalExactService {
             .settle(&converted)
             .await
             .map_err(|err| ValidationError::Exact(err.to_string()))?;
-        Ok(Self::convert_settle_response(result))
+        Self::convert_settle_response(result)
     }
 
     async fn supported(&self) -> Result<Vec<SupportedKind>, ValidationError> {
@@ -313,23 +333,48 @@ impl HttpExactService {
 impl ExactService for HttpExactService {
     async fn verify(&self, request: &VerifyRequest) -> Result<VerifyResponse, ValidationError> {
         let converted = convert_verify_request(request)?;
-        self.post("verify", &converted).await
+        let response: proto::VerifyResponse = self.post("verify", &converted).await?;
+        LocalExactService::convert_verify_response(response)
     }
 
     async fn settle(&self, request: &SettleRequest) -> Result<SettleResponse, ValidationError> {
         let converted = convert_settle_request(request)?;
-        self.post("settle", &converted).await
+        let response: proto::SettleResponse = self.post("settle", &converted).await?;
+        LocalExactService::convert_settle_response(response)
     }
 
     async fn supported(&self) -> Result<Vec<SupportedKind>, ValidationError> {
-        let response: SupportedPaymentKindsResponse =
-            self.get("supported").await.map_err(|err| {
-                ValidationError::Exact(format!(
-                    "failed to fetch supported from {}: {err}",
-                    self.base_url
-                ))
-            })?;
+        let response: proto::SupportedResponse = self.get("supported").await.map_err(|err| {
+            ValidationError::Exact(format!(
+                "failed to fetch supported from {}: {err}",
+                self.base_url
+            ))
+        })?;
         convert_supported(response)
+    }
+}
+
+fn load_x402_config() -> anyhow::Result<X402Config> {
+    let config_path = std::env::var(ENV_CONFIG_PATH)
+        .ok()
+        .and_then(|raw| {
+            let trimmed = raw.trim().to_string();
+            (!trimmed.is_empty()).then_some(std::path::PathBuf::from(trimmed))
+        })
+        .or_else(|| {
+            let default_path = std::path::PathBuf::from("config.json");
+            default_path.exists().then_some(default_path)
+        });
+
+    match config_path {
+        Some(path) => {
+            let content = std::fs::read_to_string(&path)
+                .with_context(|| format!("failed to read x402 config at {}", path.display()))?;
+            let config = serde_json::from_str(&content)
+                .with_context(|| format!("failed to parse x402 config at {}", path.display()))?;
+            Ok(config)
+        }
+        None => Ok(X402Config::default()),
     }
 }
 
