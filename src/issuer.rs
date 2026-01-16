@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use reqwest::Url;
 use rpc::{PaymentGuaranteeRequest, PaymentGuaranteeRequestClaims, SigningScheme};
 use rust_sdk_4mica::BLSCert;
+use tracing::debug;
 
 #[async_trait]
 pub trait GuaranteeIssuer: Send + Sync {
@@ -40,6 +41,9 @@ impl GuaranteeIssuer for LiveGuaranteeIssuer {
         let mut url = self.base_url.clone();
         url.set_path("core/guarantees");
 
+        let payload = serde_json::to_string(&body).unwrap_or_else(|_| "<serialize_failed>".into());
+        debug!(url = %url, payload = %payload, "Sending core guarantee request");
+
         let response = self
             .client
             .post(url)
@@ -50,6 +54,11 @@ impl GuaranteeIssuer for LiveGuaranteeIssuer {
 
         let status = response.status();
         let bytes = response.bytes().await.map_err(|err| err.to_string())?;
+        debug!(
+            status = %status,
+            body = %String::from_utf8_lossy(&bytes),
+            "Core guarantee response"
+        );
 
         if !status.is_success() {
             let message = parse_error_message(&bytes);

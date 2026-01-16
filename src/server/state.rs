@@ -12,7 +12,7 @@ use rpc::{
     PaymentGuaranteeClaims, PaymentGuaranteeRequest, PaymentGuaranteeRequestClaims,
     PaymentGuaranteeRequestClaimsV1,
 };
-use rust_sdk_4mica::{Address, BLSCert, U256, x402::X402PaymentEnvelope};
+use rust_sdk_4mica::{Address, BLSCert, U256};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
@@ -24,6 +24,59 @@ use crate::verifier::CertificateValidator;
 const SUPPORTED_VERSION: u8 = 1;
 
 pub(super) type SharedState = Arc<AppState>;
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct X402PaymentEnvelopeCompat {
+    x402_version: u64,
+    scheme: String,
+    network: String,
+    payload: PaymentGuaranteeRequestCompat,
+}
+
+#[derive(Debug, Deserialize)]
+struct PaymentGuaranteeRequestCompat {
+    claims: PaymentGuaranteeRequestClaimsCompat,
+    signature: String,
+    scheme: rpc::SigningScheme,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "version")]
+enum PaymentGuaranteeRequestClaimsCompat {
+    V1(PaymentGuaranteeRequestClaimsV1Compat),
+}
+
+#[derive(Debug, Deserialize)]
+struct PaymentGuaranteeRequestClaimsV1Compat {
+    user_address: String,
+    recipient_address: String,
+    tab_id: U256,
+    #[serde(alias = "reqId")]
+    req_id: U256,
+    amount: U256,
+    asset_address: String,
+    timestamp: u64,
+}
+
+impl PaymentGuaranteeRequestCompat {
+    fn into_request(self) -> PaymentGuaranteeRequest {
+        let claims = match self.claims {
+            PaymentGuaranteeRequestClaimsCompat::V1(claims) => {
+                PaymentGuaranteeRequestClaims::V1(PaymentGuaranteeRequestClaimsV1 {
+                    user_address: claims.user_address,
+                    recipient_address: claims.recipient_address,
+                    tab_id: claims.tab_id,
+                    req_id: claims.req_id,
+                    amount: claims.amount,
+                    asset_address: claims.asset_address,
+                    timestamp: claims.timestamp,
+                })
+            }
+        };
+        PaymentGuaranteeRequest::new(claims, self.signature, self.scheme)
+    }
+}
 
 pub(crate) struct AppState {
     four_mica: Vec<FourMicaHandler>,
@@ -263,7 +316,7 @@ impl FourMicaHandler {
         header_b64: &str,
         reqs: &PaymentRequirements,
     ) -> Result<PaymentGuaranteeRequest, ValidationError> {
-        let envelope: X402PaymentEnvelope = {
+        let envelope: X402PaymentEnvelopeCompat = {
             let decoded = BASE64_STANDARD.decode(header_b64.trim()).map_err(|err| {
                 ValidationError::InvalidHeader(format!(
                     "failed to base64 decode payment header: {err}"
@@ -301,7 +354,7 @@ impl FourMicaHandler {
             ));
         }
 
-        Ok(envelope.payload)
+        Ok(envelope.payload.into_request())
     }
 
     fn decode_and_validate_payment_payload(
@@ -312,6 +365,12 @@ impl FourMicaHandler {
         let payload = self.decode_header_into_payment_payload(header_b64, reqs)?;
         match &payload.claims {
             PaymentGuaranteeRequestClaims::V1(claims) => {
+                tracing::debug!(
+                    tab_id = format!("{:#x}", claims.tab_id),
+                    req_id = format!("{:#x}", claims.req_id),
+                    amount = format!("{:#x}", claims.amount),
+                    "Decoded 4mica claims"
+                );
                 self.ensure_claims_v1_match_requirements(claims, reqs)?;
             }
         }

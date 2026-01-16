@@ -23,7 +23,8 @@ USDC_BASE_UNITS = 10**USDC_DECIMALS
 payer_key = os.getenv("PAYER_KEY") or os.getenv("4MICA_WALLET_PRIVATE_KEY")
 user_address = os.getenv("USER_ADDRESS")
 resource_url = os.getenv("RESOURCE_URL")
-rpc_url = "http://localhost:3000"
+# Optional override for the 4mica core API URL; defaults to SDK config/env.
+rpc_url = os.getenv("4MICA_RPC_URL")
 asset_address = os.getenv("ASSET_ADDRESS") or DEFAULT_ASSET_ADDRESS
 
 if not payer_key or not user_address or not resource_url:
