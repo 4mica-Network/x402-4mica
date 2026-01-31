@@ -318,7 +318,10 @@ impl FourMicaHandler {
         ))
     }
 
-    fn extract_payload(&self, request: &VerifyRequest) -> Result<PaymentGuaranteeRequest, ValidationError> {
+    fn extract_payload(
+        &self,
+        request: &VerifyRequest,
+    ) -> Result<PaymentGuaranteeRequest, ValidationError> {
         self.extract_payload_parts(
             request.x402_version,
             request.payment_header.as_deref(),
@@ -386,7 +389,9 @@ impl FourMicaHandler {
             return Err(ValidationError::UnsupportedScheme(reqs.scheme.clone()));
         }
         if envelope.accepted.network != self.network {
-            return Err(ValidationError::UnsupportedNetwork(envelope.accepted.network));
+            return Err(ValidationError::UnsupportedNetwork(
+                envelope.accepted.network,
+            ));
         }
         if reqs.network != self.network {
             return Err(ValidationError::UnsupportedNetwork(reqs.network.clone()));
@@ -874,9 +879,7 @@ fn required_amount(reqs: &PaymentRequirements, version: u8) -> Result<U256, Vali
         1 => parse_u256(&reqs.max_amount_required).map_err(ValidationError::InvalidRequirements),
         2 => {
             let amount = reqs.amount.as_deref().ok_or_else(|| {
-                ValidationError::InvalidRequirements(
-                    "amount is required for x402Version 2".into(),
-                )
+                ValidationError::InvalidRequirements("amount is required for x402Version 2".into())
             })?;
             parse_u256_field(amount, "amount").map_err(ValidationError::InvalidRequirements)
         }

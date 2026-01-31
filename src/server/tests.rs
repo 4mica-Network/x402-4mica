@@ -204,9 +204,11 @@ async fn supported_endpoint_returns_configured_kind() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let payload: Value = serde_json::from_slice(&body).unwrap();
     let kinds = payload["kinds"].as_array().expect("kinds array");
-    assert!(kinds
-        .iter()
-        .any(|k| k["scheme"] == "4mica-credit" && k["network"] == "sepolia-mainnet"));
+    assert!(
+        kinds
+            .iter()
+            .any(|k| k["scheme"] == "4mica-credit" && k["network"] == "sepolia-mainnet")
+    );
 }
 
 #[tokio::test]
@@ -271,9 +273,7 @@ async fn supported_includes_v2_kind() {
     let payload: Value = serde_json::from_slice(&body).unwrap();
     let kinds = payload["kinds"].as_array().expect("kinds array");
     assert!(kinds.iter().any(|k| {
-        k["scheme"] == "4mica-credit"
-            && k["network"] == "sepolia-mainnet"
-            && k["x402Version"] == 2
+        k["scheme"] == "4mica-credit" && k["network"] == "sepolia-mainnet" && k["x402Version"] == 2
     }));
 }
 
