@@ -8,8 +8,6 @@ use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode},
 };
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use rust_sdk_4mica::{Address, BLSCert, PaymentGuaranteeClaims, U256};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -36,8 +34,7 @@ async fn verify_endpoint_accepts_valid_payload() {
 
     let request_body = VerifyRequest {
         x402_version: 1,
-        payment_header: Some(encoded_header()),
-        payment_payload: None,
+        payment_payload: payment_payload_v1("10"),
         payment_requirements: sample_requirements(),
     };
 
@@ -64,8 +61,7 @@ async fn verify_accepts_duplicate_payloads() {
 
     let request_body = VerifyRequest {
         x402_version: 1,
-        payment_header: Some(encoded_header()),
-        payment_payload: None,
+        payment_payload: payment_payload_v1("10"),
         payment_requirements: sample_requirements(),
     };
 
@@ -103,8 +99,7 @@ async fn verify_endpoint_accepts_v2_payload() {
 
     let request_body = VerifyRequest {
         x402_version: 2,
-        payment_header: None,
-        payment_payload: Some(payment_payload_v2("10")),
+        payment_payload: payment_payload_v2("10"),
         payment_requirements: sample_requirements_v2("10"),
     };
 
@@ -131,8 +126,7 @@ async fn settle_endpoint_returns_certificate() {
 
     let request_body = SettleRequest {
         x402_version: 1,
-        payment_header: Some(encoded_header()),
-        payment_payload: None,
+        payment_payload: payment_payload_v1("10"),
         payment_requirements: sample_requirements(),
     };
 
@@ -161,8 +155,7 @@ async fn settle_endpoint_accepts_v2_payload() {
 
     let request_body = SettleRequest {
         x402_version: 2,
-        payment_header: None,
-        payment_payload: Some(payment_payload_v2("10")),
+        payment_payload: payment_payload_v2("10"),
         payment_requirements: sample_requirements_v2("10"),
     };
 
@@ -404,8 +397,7 @@ async fn verify_rejects_invalid_version() {
 
     let request_body = VerifyRequest {
         x402_version: 99,
-        payment_header: Some(encoded_header()),
-        payment_payload: None,
+        payment_payload: payment_payload_v1("10"),
         payment_requirements: sample_requirements(),
     };
 
@@ -436,8 +428,7 @@ async fn verify_rejects_mismatched_amount() {
 
     let request_body = VerifyRequest {
         x402_version: 1,
-        payment_header: Some(encoded_header()),
-        payment_payload: None,
+        payment_payload: payment_payload_v1("10"),
         payment_requirements: requirements,
     };
 
@@ -465,8 +456,7 @@ async fn verify_rejects_v2_mismatched_amount() {
 
     let request_body = VerifyRequest {
         x402_version: 2,
-        payment_header: None,
-        payment_payload: Some(payment_payload_v2("10")),
+        payment_payload: payment_payload_v2("10"),
         payment_requirements: sample_requirements_v2("11"),
     };
 
@@ -494,8 +484,7 @@ async fn settle_propagates_issue_errors() {
 
     let request_body = SettleRequest {
         x402_version: 1,
-        payment_header: Some(encoded_header()),
-        payment_payload: None,
+        payment_payload: payment_payload_v1("10"),
         payment_requirements: sample_requirements(),
     };
 
@@ -522,8 +511,7 @@ async fn settle_propagates_certificate_errors() {
 
     let request_body = SettleRequest {
         x402_version: 1,
-        payment_header: Some(encoded_header()),
-        payment_payload: None,
+        payment_payload: payment_payload_v1("10"),
         payment_requirements: sample_requirements(),
     };
 
@@ -550,8 +538,7 @@ async fn settle_rejects_invalid_version() {
 
     let request_body = SettleRequest {
         x402_version: 99,
-        payment_header: Some(encoded_header()),
-        payment_payload: None,
+        payment_payload: payment_payload_v1("10"),
         payment_requirements: sample_requirements(),
     };
 
@@ -630,31 +617,32 @@ fn sample_requirements_v2(amount: &str) -> PaymentRequirements {
     }
 }
 
-fn encoded_header() -> String {
+fn payment_payload_v1(amount: &str) -> Value {
+    payment_payload_v1_with_scheme("4mica-credit", "sepolia-mainnet", amount)
+}
+
+fn payment_payload_v1_with_scheme(scheme: &str, network: &str, amount: &str) -> Value {
     let recipient = format!("{:#x}", recipient_address());
     let asset = format!("{:#x}", asset_address());
-    BASE64_STANDARD.encode(
-        json!({
-            "x402Version": 1,
-            "scheme": "4mica-credit",
-            "network": "sepolia-mainnet",
-            "payload": {
-                    "claims": {
-                        "version": "v1",
-                        "user_address": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-                        "recipient_address": recipient,
-                        "tab_id": "0x1",
-                        "req_id": "0x0",
-                        "amount": "10",
-                        "asset_address": asset,
-                        "timestamp": 1
-                    },
-                "signature": "0x1111",
-                "scheme": "eip712"
-            }
-        })
-        .to_string(),
-    )
+    json!({
+        "x402Version": 1,
+        "scheme": scheme,
+        "network": network,
+        "payload": {
+            "claims": {
+                "version": "v1",
+                "user_address": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "recipient_address": recipient,
+                "tab_id": "0x1",
+                "req_id": "0x0",
+                "amount": amount,
+                "asset_address": asset,
+                "timestamp": 1
+            },
+            "signature": "0x1111",
+            "scheme": "eip712"
+        }
+    })
 }
 
 fn payment_payload_v2(amount: &str) -> Value {
@@ -828,8 +816,7 @@ async fn verify_routes_to_exact_service() {
 
     let request_body = VerifyRequest {
         x402_version: 1,
-        payment_header: Some(BASE64_STANDARD.encode("dummy")),
-        payment_payload: None,
+        payment_payload: payment_payload_v1_with_scheme("exact", "base", "10"),
         payment_requirements: PaymentRequirements {
             scheme: "exact".into(),
             network: "base".into(),
@@ -867,8 +854,7 @@ async fn settle_routes_to_exact_service() {
 
     let request_body = SettleRequest {
         x402_version: 1,
-        payment_header: Some(BASE64_STANDARD.encode("dummy")),
-        payment_payload: None,
+        payment_payload: payment_payload_v1_with_scheme("exact", "base", "10"),
         payment_requirements: PaymentRequirements {
             scheme: "exact".into(),
             network: "base".into(),

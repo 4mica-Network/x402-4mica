@@ -10,7 +10,6 @@ use x402_rs::facilitator::Facilitator;
 use x402_rs::facilitator_local::FacilitatorLocal;
 use x402_rs::proto::{self, SupportedPaymentKind};
 use x402_rs::scheme::{SchemeBlueprints, SchemeRegistry};
-use x402_rs::util::Base64Bytes;
 
 use crate::server::state::{
     ExactService, PaymentRequirements, SettleRequest, SettleResponse, SupportedKind,
@@ -80,13 +79,6 @@ fn convert_requirements(req: &PaymentRequirements) -> serde_json::Value {
     JsonValue::Object(map)
 }
 
-fn decode_payment_payload(header: &str) -> Result<serde_json::Value, ValidationError> {
-    let bytes = Base64Bytes::from(header.as_bytes())
-        .decode()
-        .map_err(|err| ValidationError::InvalidHeader(err.to_string()))?;
-    serde_json::from_slice(&bytes).map_err(|err| ValidationError::InvalidHeader(err.to_string()))
-}
-
 fn convert_verify_request(
     request: &VerifyRequest,
 ) -> Result<proto::VerifyRequest, ValidationError> {
@@ -96,15 +88,7 @@ fn convert_verify_request(
         return Err(ValidationError::UnsupportedVersion(request.x402_version));
     }
 
-    let payload = if let Some(payload) = &request.payment_payload {
-        payload.clone()
-    } else if let Some(header) = request.payment_header.as_deref() {
-        decode_payment_payload(header)?
-    } else {
-        return Err(ValidationError::InvalidHeader(
-            "paymentHeader or paymentPayload is required".into(),
-        ));
-    };
+    let payload = request.payment_payload.clone();
     let payment_requirements = convert_requirements(&request.payment_requirements);
 
     let mut map = Map::new();
@@ -123,7 +107,6 @@ fn convert_settle_request(
 ) -> Result<proto::SettleRequest, ValidationError> {
     convert_verify_request(&VerifyRequest {
         x402_version: request.x402_version,
-        payment_header: request.payment_header.clone(),
         payment_payload: request.payment_payload.clone(),
         payment_requirements: request.payment_requirements.clone(),
     })
@@ -400,8 +383,12 @@ mod tests {
     fn sample_verify_request() -> VerifyRequest {
         VerifyRequest {
             x402_version: 1,
-            payment_header: Some("header".into()),
-            payment_payload: None,
+            payment_payload: serde_json::json!({
+                "x402Version": 1,
+                "scheme": "exact",
+                "network": "base",
+                "payload": {}
+            }),
             payment_requirements: PaymentRequirements {
                 scheme: "exact".into(),
                 network: "base".into(),
@@ -423,8 +410,12 @@ mod tests {
     fn sample_settle_request() -> SettleRequest {
         SettleRequest {
             x402_version: 1,
-            payment_header: Some("header".into()),
-            payment_payload: None,
+            payment_payload: serde_json::json!({
+                "x402Version": 1,
+                "scheme": "exact",
+                "network": "base",
+                "payload": {}
+            }),
             payment_requirements: sample_verify_request().payment_requirements,
         }
     }

@@ -6,7 +6,6 @@ use std::{
 
 use async_trait::async_trait;
 use axum::http::StatusCode;
-use base64::{Engine, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use reqwest::{Client, Url};
 use rpc::{
     PaymentGuaranteeClaims, PaymentGuaranteeRequest, PaymentGuaranteeRequestClaims,
@@ -27,7 +26,7 @@ pub(super) type SharedState = Arc<AppState>;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct X402PaymentEnvelopeCompat {
+struct X402PaymentPayloadV1 {
     x402_version: u64,
     scheme: String,
     network: String,
@@ -324,8 +323,7 @@ impl FourMicaHandler {
     ) -> Result<PaymentGuaranteeRequest, ValidationError> {
         self.extract_payload_parts(
             request.x402_version,
-            request.payment_header.as_deref(),
-            request.payment_payload.as_ref(),
+            &request.payment_payload,
             &request.payment_requirements,
         )
     }
@@ -336,8 +334,7 @@ impl FourMicaHandler {
     ) -> Result<PaymentGuaranteeRequest, ValidationError> {
         self.extract_payload_parts(
             request.x402_version,
-            request.payment_header.as_deref(),
-            request.payment_payload.as_ref(),
+            &request.payment_payload,
             &request.payment_requirements,
         )
     }
@@ -345,19 +342,10 @@ impl FourMicaHandler {
     fn extract_payload_parts(
         &self,
         x402_version: u8,
-        payment_header: Option<&str>,
-        payment_payload: Option<&Value>,
+        payment_payload: &Value,
         reqs: &PaymentRequirements,
     ) -> Result<PaymentGuaranteeRequest, ValidationError> {
-        if let Some(payload) = payment_payload {
-            return self.decode_payment_payload(payload, reqs, x402_version);
-        }
-        if let Some(header) = payment_header {
-            return self.decode_header_into_payment_payload(header, reqs, x402_version);
-        }
-        Err(ValidationError::InvalidHeader(
-            "paymentHeader or paymentPayload is required".into(),
-        ))
+        self.decode_payment_payload(payment_payload, reqs, x402_version)
     }
 
     fn decode_payment_payload(
@@ -366,91 +354,81 @@ impl FourMicaHandler {
         reqs: &PaymentRequirements,
         version: u8,
     ) -> Result<PaymentGuaranteeRequest, ValidationError> {
-        let envelope: X402PaymentPayloadV2 =
-            serde_json::from_value(payload.clone()).map_err(|err| {
-                ValidationError::InvalidHeader(format!(
-                    "failed to deserialize payment payload: {err}"
-                ))
-            })?;
+        match version {
+            1 => {
+                let envelope: X402PaymentPayloadV1 = serde_json::from_value(payload.clone())
+                    .map_err(|err| {
+                        ValidationError::InvalidHeader(format!(
+                            "failed to deserialize v1 payment payload: {err}"
+                        ))
+                    })?;
 
-        if envelope.x402_version != version {
-            return Err(ValidationError::InvalidHeader(format!(
-                "payment payload x402Version {} does not match request x402Version {}",
-                envelope.x402_version, version
-            )));
-        }
-        if envelope.x402_version != 2 {
-            return Err(ValidationError::UnsupportedVersion(envelope.x402_version));
-        }
-        if envelope.accepted.scheme != self.scheme {
-            return Err(ValidationError::UnsupportedScheme(envelope.accepted.scheme));
-        }
-        if reqs.scheme != self.scheme {
-            return Err(ValidationError::UnsupportedScheme(reqs.scheme.clone()));
-        }
-        if envelope.accepted.network != self.network {
-            return Err(ValidationError::UnsupportedNetwork(
-                envelope.accepted.network,
-            ));
-        }
-        if reqs.network != self.network {
-            return Err(ValidationError::UnsupportedNetwork(reqs.network.clone()));
-        }
-        if envelope.payload.signature.trim().is_empty() {
-            return Err(ValidationError::InvalidHeader(
-                "signature cannot be empty".into(),
-            ));
-        }
+                if envelope.scheme != self.scheme {
+                    return Err(ValidationError::UnsupportedScheme(envelope.scheme));
+                }
+                if reqs.scheme != self.scheme {
+                    return Err(ValidationError::UnsupportedScheme(reqs.scheme.clone()));
+                }
+                if envelope.network != self.network {
+                    return Err(ValidationError::UnsupportedNetwork(envelope.network));
+                }
+                if reqs.network != self.network {
+                    return Err(ValidationError::UnsupportedNetwork(reqs.network.clone()));
+                }
+                if envelope.x402_version as u8 != version {
+                    return Err(ValidationError::InvalidHeader(format!(
+                        "payment payload x402Version {} does not match request x402Version {}",
+                        envelope.x402_version, version
+                    )));
+                }
 
-        Ok(envelope.payload.into_request())
-    }
+                let signature = envelope.payload.signature.trim();
+                if signature.is_empty() {
+                    return Err(ValidationError::InvalidHeader(
+                        "signature cannot be empty".into(),
+                    ));
+                }
 
-    fn decode_header_into_payment_payload(
-        &self,
-        header_b64: &str,
-        reqs: &PaymentRequirements,
-        version: u8,
-    ) -> Result<PaymentGuaranteeRequest, ValidationError> {
-        let envelope: X402PaymentEnvelopeCompat = {
-            let decoded = BASE64_STANDARD.decode(header_b64.trim()).map_err(|err| {
-                ValidationError::InvalidHeader(format!(
-                    "failed to base64 decode payment header: {err}"
-                ))
-            })?;
-            serde_json::from_slice(&decoded).map_err(|err| {
-                ValidationError::InvalidHeader(format!(
-                    "failed to deserialize payment header: {err}"
-                ))
-            })?
-        };
+                Ok(envelope.payload.into_request())
+            }
+            2 => {
+                let envelope: X402PaymentPayloadV2 = serde_json::from_value(payload.clone())
+                    .map_err(|err| {
+                        ValidationError::InvalidHeader(format!(
+                            "failed to deserialize v2 payment payload: {err}"
+                        ))
+                    })?;
 
-        if envelope.scheme != self.scheme {
-            return Err(ValidationError::UnsupportedScheme(envelope.scheme));
-        }
-        if reqs.scheme != self.scheme {
-            return Err(ValidationError::UnsupportedScheme(reqs.scheme.clone()));
-        }
-        if envelope.network != self.network {
-            return Err(ValidationError::UnsupportedNetwork(envelope.network));
-        }
-        if reqs.network != self.network {
-            return Err(ValidationError::UnsupportedNetwork(reqs.network.clone()));
-        }
-        if envelope.x402_version as u8 != version {
-            return Err(ValidationError::InvalidHeader(format!(
-                "payment header x402Version {} does not match request x402Version {}",
-                envelope.x402_version, version
-            )));
-        }
+                if envelope.x402_version != version {
+                    return Err(ValidationError::InvalidHeader(format!(
+                        "payment payload x402Version {} does not match request x402Version {}",
+                        envelope.x402_version, version
+                    )));
+                }
+                if envelope.accepted.scheme != self.scheme {
+                    return Err(ValidationError::UnsupportedScheme(envelope.accepted.scheme));
+                }
+                if reqs.scheme != self.scheme {
+                    return Err(ValidationError::UnsupportedScheme(reqs.scheme.clone()));
+                }
+                if envelope.accepted.network != self.network {
+                    return Err(ValidationError::UnsupportedNetwork(
+                        envelope.accepted.network,
+                    ));
+                }
+                if reqs.network != self.network {
+                    return Err(ValidationError::UnsupportedNetwork(reqs.network.clone()));
+                }
+                if envelope.payload.signature.trim().is_empty() {
+                    return Err(ValidationError::InvalidHeader(
+                        "signature cannot be empty".into(),
+                    ));
+                }
 
-        let signature = envelope.payload.signature.trim();
-        if signature.is_empty() {
-            return Err(ValidationError::InvalidHeader(
-                "signature cannot be empty".into(),
-            ));
+                Ok(envelope.payload.into_request())
+            }
+            _ => Err(ValidationError::UnsupportedVersion(version)),
         }
-
-        Ok(envelope.payload.into_request())
     }
 
     fn validate_payment_payload(
@@ -762,12 +740,8 @@ pub struct CreateTabResponse {
 pub struct VerifyRequest {
     #[serde(rename = "x402Version")]
     pub x402_version: u8,
-    #[serde(rename = "paymentHeader")]
-    #[serde(default)]
-    pub payment_header: Option<String>,
     #[serde(rename = "paymentPayload")]
-    #[serde(default)]
-    pub payment_payload: Option<Value>,
+    pub payment_payload: Value,
     #[serde(rename = "paymentRequirements")]
     pub payment_requirements: PaymentRequirements,
 }
@@ -776,12 +750,8 @@ pub struct VerifyRequest {
 pub struct SettleRequest {
     #[serde(rename = "x402Version")]
     pub x402_version: u8,
-    #[serde(rename = "paymentHeader")]
-    #[serde(default)]
-    pub payment_header: Option<String>,
     #[serde(rename = "paymentPayload")]
-    #[serde(default)]
-    pub payment_payload: Option<Value>,
+    pub payment_payload: Value,
     #[serde(rename = "paymentRequirements")]
     pub payment_requirements: PaymentRequirements,
 }
