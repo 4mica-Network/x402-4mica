@@ -9,9 +9,12 @@ use serde::Serialize;
 use tower_http::trace::TraceLayer;
 use tracing::{info, warn};
 
-use super::state::{
-    CreateTabRequest, HealthResponse, SettleRequest, SettleResponse, SharedState, SupportedKind,
-    SupportedResponse, TabError, VerifyRequest, VerifyResponse,
+use super::{
+    model::{
+        CreateTabRequest, HealthResponse, SettleRequest, SettleResponse, SupportedKind,
+        SupportedResponse, VerifyRequest, VerifyResponse,
+    },
+    state::{SharedState, TabError},
 };
 
 pub(super) fn build_router(state: SharedState) -> Router {

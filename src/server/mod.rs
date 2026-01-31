@@ -1,4 +1,5 @@
 mod handlers;
+pub mod model;
 pub(crate) mod state;
 #[cfg(test)]
 mod tests;

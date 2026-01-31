@@ -13,17 +13,16 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
+use crate::exact::ExactService;
 use crate::issuer::GuaranteeIssuer;
 use crate::verifier::CertificateValidator;
 
-use super::{
-    handlers::build_router,
-    state::{
-        AppState, CreateTabRequest, CreateTabResponse, ExactService, FourMicaHandler,
-        PaymentRequirements, SettleRequest, SettleResponse, SharedState, SupportedKind, TabError,
-        TabService, ValidationError, VerifyRequest, VerifyResponse,
-    },
+use super::handlers::build_router;
+use super::model::{
+    CreateTabRequest, CreateTabResponse, PaymentRequirements, SettleRequest, SettleResponse,
+    SupportedKind, VerifyRequest, VerifyResponse, X402PaymentPayload,
 };
+use super::state::{AppState, FourMicaHandler, SharedState, TabError, TabService, ValidationError};
 
 #[tokio::test]
 async fn verify_endpoint_accepts_valid_payload() {
@@ -445,7 +444,7 @@ async fn tabs_endpoint_propagates_upstream_errors() {
 }
 
 #[tokio::test]
-async fn verify_rejects_invalid_version() {
+async fn verify_rejects_mismatched_versions() {
     let verifier = Arc::new(MockVerifier::success());
     let issuer = Arc::new(MockIssuer::success());
     let state = test_state(verifier.clone(), issuer.clone());
@@ -453,9 +452,7 @@ async fn verify_rejects_invalid_version() {
 
     let request_body = VerifyRequest {
         x402_version: Some(99),
-        payment_payload: json!({
-            "x402Version": 99
-        }),
+        payment_payload: payment_payload_v1("10"),
         payment_requirements: sample_requirements(),
     };
 
@@ -469,7 +466,7 @@ async fn verify_rejects_invalid_version() {
     let payload: VerifyResponse = serde_json::from_slice(&body).unwrap();
     assert!(!payload.is_valid);
     let reason = payload.invalid_reason.expect("reason");
-    assert!(reason.contains("unsupported x402Version"));
+    assert!(reason.contains("does not match paymentPayload x402Version"));
     assert_eq!(verifier.verify_calls(), 0);
     assert_eq!(issuer.issue_calls(), 0);
 }
@@ -588,7 +585,7 @@ async fn settle_propagates_certificate_errors() {
 }
 
 #[tokio::test]
-async fn settle_rejects_invalid_version() {
+async fn settle_rejects_mismatched_versions() {
     let verifier = Arc::new(MockVerifier::success());
     let issuer = Arc::new(MockIssuer::success());
     let state = test_state(verifier.clone(), issuer.clone());
@@ -596,9 +593,7 @@ async fn settle_rejects_invalid_version() {
 
     let request_body = SettleRequest {
         x402_version: Some(99),
-        payment_payload: json!({
-            "x402Version": 99
-        }),
+        payment_payload: payment_payload_v1("10"),
         payment_requirements: sample_requirements(),
     };
 
@@ -615,7 +610,7 @@ async fn settle_rejects_invalid_version() {
         payload["error"]
             .as_str()
             .unwrap()
-            .contains("unsupported x402Version")
+            .contains("does not match paymentPayload x402Version")
     );
     assert!(payload["certificate"].is_null());
     assert_eq!(verifier.verify_calls(), 0);
@@ -677,14 +672,14 @@ fn sample_requirements_v2(amount: &str) -> PaymentRequirements {
     }
 }
 
-fn payment_payload_v1(amount: &str) -> Value {
+fn payment_payload_v1(amount: &str) -> X402PaymentPayload {
     payment_payload_v1_with_scheme("4mica-credit", "sepolia-mainnet", amount)
 }
 
-fn payment_payload_v1_with_scheme(scheme: &str, network: &str, amount: &str) -> Value {
+fn payment_payload_v1_with_scheme(scheme: &str, network: &str, amount: &str) -> X402PaymentPayload {
     let recipient = format!("{:#x}", recipient_address());
     let asset = format!("{:#x}", asset_address());
-    json!({
+    let value = json!({
         "x402Version": 1,
         "scheme": scheme,
         "network": network,
@@ -702,13 +697,15 @@ fn payment_payload_v1_with_scheme(scheme: &str, network: &str, amount: &str) -> 
             "signature": "0x1111",
             "scheme": "eip712"
         }
-    })
+    });
+
+    serde_json::from_value(value).expect("failed to deserialize payment payload v1")
 }
 
-fn payment_payload_v2(amount: &str) -> Value {
+fn payment_payload_v2(amount: &str) -> X402PaymentPayload {
     let recipient = format!("{:#x}", recipient_address());
     let asset = format!("{:#x}", asset_address());
-    json!({
+    let value = json!({
         "x402Version": 2,
         "accepted": {
             "scheme": "4mica-credit",
@@ -731,7 +728,9 @@ fn payment_payload_v2(amount: &str) -> Value {
             "signature": "0x1111",
             "scheme": "eip712"
         }
-    })
+    });
+
+    serde_json::from_value(value).expect("failed to deserialize payment payload v2")
 }
 
 fn post_json<T: Serialize>(uri: &str, payload: &T) -> Request<Body> {

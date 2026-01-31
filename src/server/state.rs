@@ -1,5 +1,4 @@
 use std::{
-    collections::HashMap,
     str::FromStr,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
@@ -12,79 +11,25 @@ use rpc::{
     PaymentGuaranteeClaims, PaymentGuaranteeRequest, PaymentGuaranteeRequestClaims,
     PaymentGuaranteeRequestClaimsV1,
 };
-use rust_sdk_4mica::{Address, BLSCert, U256};
+use rust_sdk_4mica::{Address, U256};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use thiserror::Error;
 use tracing::error;
 
-use crate::issuer::{GuaranteeIssuer, parse_error_message};
+use crate::server::model::{
+    CoreCreateTabRequest, CoreCreateTabResponse, CreateTabRequest, CreateTabResponse,
+    PaymentRequirements, SettleRequest, SettleResponse, SupportedKind, VerifyRequest,
+    VerifyResponse, X402PaymentPayload,
+};
 use crate::verifier::CertificateValidator;
+use crate::{
+    exact::ExactService,
+    issuer::{GuaranteeIssuer, parse_error_message},
+};
 
 const SUPPORTED_VERSIONS: [u8; 2] = [1, 2];
 
 pub(super) type SharedState = Arc<AppState>;
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct X402PaymentPayloadV1 {
-    x402_version: u64,
-    scheme: String,
-    network: String,
-    payload: PaymentGuaranteeRequestCompat,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct X402PaymentPayloadV2 {
-    x402_version: u8,
-    accepted: PaymentRequirements,
-    payload: PaymentGuaranteeRequestCompat,
-}
-
-#[derive(Debug, Deserialize)]
-struct PaymentGuaranteeRequestCompat {
-    claims: PaymentGuaranteeRequestClaimsCompat,
-    signature: String,
-    scheme: rpc::SigningScheme,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "snake_case", tag = "version")]
-enum PaymentGuaranteeRequestClaimsCompat {
-    V1(PaymentGuaranteeRequestClaimsV1Compat),
-}
-
-#[derive(Debug, Deserialize)]
-struct PaymentGuaranteeRequestClaimsV1Compat {
-    user_address: String,
-    recipient_address: String,
-    tab_id: U256,
-    #[serde(alias = "reqId")]
-    req_id: U256,
-    amount: U256,
-    asset_address: String,
-    timestamp: u64,
-}
-
-impl PaymentGuaranteeRequestCompat {
-    fn into_request(self) -> PaymentGuaranteeRequest {
-        let claims = match self.claims {
-            PaymentGuaranteeRequestClaimsCompat::V1(claims) => {
-                PaymentGuaranteeRequestClaims::V1(PaymentGuaranteeRequestClaimsV1 {
-                    user_address: claims.user_address,
-                    recipient_address: claims.recipient_address,
-                    tab_id: claims.tab_id,
-                    req_id: claims.req_id,
-                    amount: claims.amount,
-                    asset_address: claims.asset_address,
-                    timestamp: claims.timestamp,
-                })
-            }
-        };
-        PaymentGuaranteeRequest::new(claims, self.signature, self.scheme)
-    }
-}
 
 pub(crate) struct AppState {
     four_mica: Vec<FourMicaHandler>,
@@ -278,7 +223,10 @@ impl FourMicaHandler {
         request: &VerifyRequest,
         x402_version: u8,
     ) -> Result<VerifyResponse, ValidationError> {
-        let payload = self.extract_payload(request, x402_version)?;
+        let payload = self.decode_payment_payload(
+            request.payment_payload.clone(),
+            &request.payment_requirements,
+        )?;
         self.validate_payment_payload(&payload, &request.payment_requirements, x402_version)?;
 
         Ok(VerifyResponse {
@@ -293,7 +241,10 @@ impl FourMicaHandler {
         request: &SettleRequest,
         x402_version: u8,
     ) -> Result<SettleResponse, ValidationError> {
-        let payload = self.extract_payload_for_settle(request, x402_version)?;
+        let payload = self.decode_payment_payload(
+            request.payment_payload.clone(),
+            &request.payment_requirements,
+        )?;
         self.validate_payment_payload(&payload, &request.payment_requirements, x402_version)?;
 
         let certificate = self
@@ -326,54 +277,13 @@ impl FourMicaHandler {
         ))
     }
 
-    fn extract_payload(
-        &self,
-        request: &VerifyRequest,
-        x402_version: u8,
-    ) -> Result<PaymentGuaranteeRequest, ValidationError> {
-        self.extract_payload_parts(
-            x402_version,
-            &request.payment_payload,
-            &request.payment_requirements,
-        )
-    }
-
-    fn extract_payload_for_settle(
-        &self,
-        request: &SettleRequest,
-        x402_version: u8,
-    ) -> Result<PaymentGuaranteeRequest, ValidationError> {
-        self.extract_payload_parts(
-            x402_version,
-            &request.payment_payload,
-            &request.payment_requirements,
-        )
-    }
-
-    fn extract_payload_parts(
-        &self,
-        x402_version: u8,
-        payment_payload: &Value,
-        reqs: &PaymentRequirements,
-    ) -> Result<PaymentGuaranteeRequest, ValidationError> {
-        self.decode_payment_payload(payment_payload, reqs, x402_version)
-    }
-
     fn decode_payment_payload(
         &self,
-        payload: &Value,
+        payload: X402PaymentPayload,
         reqs: &PaymentRequirements,
-        version: u8,
     ) -> Result<PaymentGuaranteeRequest, ValidationError> {
-        match version {
-            1 => {
-                let envelope: X402PaymentPayloadV1 = serde_json::from_value(payload.clone())
-                    .map_err(|err| {
-                        ValidationError::InvalidHeader(format!(
-                            "failed to deserialize v1 payment payload: {err}"
-                        ))
-                    })?;
-
+        match payload {
+            X402PaymentPayload::V1(envelope) => {
                 if envelope.scheme != self.scheme {
                     return Err(ValidationError::UnsupportedScheme(envelope.scheme));
                 }
@@ -386,12 +296,6 @@ impl FourMicaHandler {
                 if reqs.network != self.network {
                     return Err(ValidationError::UnsupportedNetwork(reqs.network.clone()));
                 }
-                if envelope.x402_version as u8 != version {
-                    return Err(ValidationError::InvalidHeader(format!(
-                        "payment payload x402Version {} does not match request x402Version {}",
-                        envelope.x402_version, version
-                    )));
-                }
 
                 let signature = envelope.payload.signature.trim();
                 if signature.is_empty() {
@@ -402,20 +306,7 @@ impl FourMicaHandler {
 
                 Ok(envelope.payload.into_request())
             }
-            2 => {
-                let envelope: X402PaymentPayloadV2 = serde_json::from_value(payload.clone())
-                    .map_err(|err| {
-                        ValidationError::InvalidHeader(format!(
-                            "failed to deserialize v2 payment payload: {err}"
-                        ))
-                    })?;
-
-                if envelope.x402_version != version {
-                    return Err(ValidationError::InvalidHeader(format!(
-                        "payment payload x402Version {} does not match request x402Version {}",
-                        envelope.x402_version, version
-                    )));
-                }
+            X402PaymentPayload::V2(envelope) => {
                 if envelope.accepted.scheme != self.scheme {
                     return Err(ValidationError::UnsupportedScheme(envelope.accepted.scheme));
                 }
@@ -438,7 +329,6 @@ impl FourMicaHandler {
 
                 Ok(envelope.payload.into_request())
             }
-            _ => Err(ValidationError::UnsupportedVersion(version)),
         }
     }
 
@@ -667,225 +557,22 @@ fn current_timestamp() -> i64 {
         .unwrap_or_default()
 }
 
-#[async_trait]
-pub(crate) trait ExactService: Send + Sync {
-    async fn verify(&self, request: &VerifyRequest) -> Result<VerifyResponse, ValidationError>;
-    async fn settle(&self, request: &SettleRequest) -> Result<SettleResponse, ValidationError>;
-    async fn supported(&self) -> Result<Vec<SupportedKind>, ValidationError>;
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SupportedKind {
-    pub scheme: String,
-    pub network: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub x402_version: Option<u8>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub extra: Option<Value>,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SupportedResponse {
-    pub kinds: Vec<SupportedKind>,
-    pub extensions: Vec<String>,
-    pub signers: HashMap<String, Vec<String>>,
-}
-
-impl SupportedResponse {
-    pub fn new(kinds: Vec<SupportedKind>) -> Self {
-        Self {
-            kinds,
-            extensions: Vec::new(),
-            signers: HashMap::new(),
-        }
-    }
-}
-
-#[derive(Serialize)]
-pub struct HealthResponse<'a> {
-    pub status: &'a str,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PaymentRequirements {
-    pub scheme: String,
-    pub network: String,
-    #[serde(default)]
-    pub max_amount_required: String,
-    #[serde(default)]
-    pub amount: Option<String>,
-    pub resource: Option<String>,
-    pub description: Option<String>,
-    pub mime_type: Option<String>,
-    pub output_schema: Option<Value>,
-    pub pay_to: String,
-    pub max_timeout_seconds: Option<u64>,
-    pub asset: String,
-    pub extra: Option<Value>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct CreateTabRequest {
-    #[serde(alias = "userAddress")]
-    pub user_address: String,
-    #[serde(alias = "recipientAddress")]
-    pub recipient_address: String,
-    #[serde(alias = "erc20Token", alias = "assetAddress")]
-    #[serde(default)]
-    pub erc20_token: Option<String>,
-    #[serde(alias = "ttlSeconds")]
-    #[serde(default)]
-    pub ttl_seconds: Option<u64>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CreateTabResponse {
-    pub tab_id: String,
-    pub user_address: String,
-    pub recipient_address: String,
-    pub asset_address: String,
-    pub start_timestamp: i64,
-    pub ttl_seconds: i64,
-    pub next_req_id: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct VerifyRequest {
-    #[serde(rename = "x402Version")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub x402_version: Option<u8>,
-    #[serde(rename = "paymentPayload")]
-    pub payment_payload: Value,
-    #[serde(rename = "paymentRequirements")]
-    pub payment_requirements: PaymentRequirements,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct SettleRequest {
-    #[serde(rename = "x402Version")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub x402_version: Option<u8>,
-    #[serde(rename = "paymentPayload")]
-    pub payment_payload: Value,
-    #[serde(rename = "paymentRequirements")]
-    pub payment_requirements: PaymentRequirements,
-}
-
-impl VerifyRequest {
-    pub(crate) fn resolved_x402_version(&self) -> Result<u8, ValidationError> {
-        resolve_x402_version(self.x402_version, &self.payment_payload)
-    }
-}
-
-impl SettleRequest {
-    pub(crate) fn resolved_x402_version(&self) -> Result<u8, ValidationError> {
-        resolve_x402_version(self.x402_version, &self.payment_payload)
-    }
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct VerifyResponse {
-    pub is_valid: bool,
-    pub invalid_reason: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub certificate: Option<CertificateResponse>,
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct CertificateResponse {
-    pub claims: String,
-    pub signature: String,
-}
-
-impl From<BLSCert> for CertificateResponse {
-    fn from(cert: BLSCert) -> Self {
-        Self {
-            claims: cert.claims,
-            signature: cert.signature,
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SettleResponse {
-    pub success: bool,
-    pub error: Option<String>,
-    pub tx_hash: Option<String>,
-    pub network_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub certificate: Option<CertificateResponse>,
-}
-
-impl SettleResponse {
-    pub fn invalid(reason: String, network: &str) -> Self {
-        Self {
-            success: false,
-            error: Some(reason),
-            tx_hash: None,
-            network_id: Some(network.to_string()),
-            certificate: None,
-        }
-    }
-
-    pub fn from_exact(
-        success: bool,
-        error: Option<String>,
-        tx_hash: Option<String>,
-        network: String,
-    ) -> Self {
-        Self {
-            success,
-            error,
-            tx_hash,
-            network_id: Some(network),
-            certificate: None,
-        }
-    }
-
-    pub fn four_mica_success(network: &str, certificate: CertificateResponse) -> Self {
-        Self {
-            success: true,
-            error: None,
-            tx_hash: None,
-            network_id: Some(network.to_string()),
-            certificate: Some(certificate),
-        }
-    }
-}
-
-fn extract_payload_x402_version(payload: &Value) -> Option<u8> {
-    match payload.get("x402Version")? {
-        Value::Number(value) => value.as_u64().and_then(|raw| u8::try_from(raw).ok()),
-        Value::String(value) => value.parse::<u8>().ok(),
-        _ => None,
-    }
-}
-
-fn resolve_x402_version(
+pub fn resolve_x402_version(
+    payment_payload: &X402PaymentPayload,
     request_version: Option<u8>,
-    payment_payload: &Value,
 ) -> Result<u8, ValidationError> {
-    let payload_version = extract_payload_x402_version(payment_payload);
-    match (request_version, payload_version) {
-        (Some(request_version), Some(payload_version)) if request_version != payload_version => {
-            Err(ValidationError::InvalidHeader(format!(
-                "x402Version {} does not match paymentPayload x402Version {}",
-                request_version, payload_version
-            )))
-        }
-        (Some(request_version), _) => Ok(request_version),
-        (None, Some(payload_version)) => Ok(payload_version),
-        (None, None) => Err(ValidationError::InvalidHeader(
-            "x402Version missing from request and paymentPayload".into(),
-        )),
+    let payload_version = payment_payload.x402_version();
+
+    if let Some(request_version) = request_version
+        && request_version != payload_version
+    {
+        return Err(ValidationError::InvalidHeader(format!(
+            "x402Version {} does not match paymentPayload x402Version {}",
+            request_version, payload_version
+        )));
     }
+
+    Ok(payload_version)
 }
 
 fn parse_u256_field(value: &str, field: &str) -> Result<U256, String> {
@@ -938,6 +625,9 @@ pub enum ValidationError {
     UnsupportedVersion(u8),
     #[error("exact flow error: {0}")]
     Exact(String),
+
+    #[error(transparent)]
+    Other(anyhow::Error),
 }
 
 #[derive(Debug, Error)]
@@ -948,25 +638,4 @@ pub enum TabError {
     Invalid(String),
     #[error("{message}")]
     Upstream { status: StatusCode, message: String },
-}
-
-#[derive(Debug, Serialize)]
-struct CoreCreateTabRequest {
-    user_address: String,
-    recipient_address: String,
-    erc20_token: Option<String>,
-    ttl: Option<u64>,
-}
-
-#[derive(Debug, Deserialize)]
-struct CoreCreateTabResponse {
-    id: U256,
-    #[serde(default)]
-    #[serde(alias = "asset_address", alias = "assetAddress")]
-    asset_address: Option<String>,
-    #[serde(default)]
-    erc20_token: Option<String>,
-    #[serde(default)]
-    #[serde(alias = "nextReqId", alias = "reqId")]
-    next_req_id: Option<U256>,
 }
