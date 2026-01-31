@@ -36,7 +36,8 @@ async fn verify_endpoint_accepts_valid_payload() {
 
     let request_body = VerifyRequest {
         x402_version: 1,
-        payment_header: encoded_header(),
+        payment_header: Some(encoded_header()),
+        payment_payload: None,
         payment_requirements: sample_requirements(),
     };
 
@@ -63,7 +64,8 @@ async fn verify_accepts_duplicate_payloads() {
 
     let request_body = VerifyRequest {
         x402_version: 1,
-        payment_header: encoded_header(),
+        payment_header: Some(encoded_header()),
+        payment_payload: None,
         payment_requirements: sample_requirements(),
     };
 
@@ -93,6 +95,34 @@ async fn verify_accepts_duplicate_payloads() {
 }
 
 #[tokio::test]
+async fn verify_endpoint_accepts_v2_payload() {
+    let verifier = Arc::new(MockVerifier::success());
+    let issuer = Arc::new(MockIssuer::success());
+    let state = test_state(verifier.clone(), issuer.clone());
+    let router = build_router(state);
+
+    let request_body = VerifyRequest {
+        x402_version: 2,
+        payment_header: None,
+        payment_payload: Some(payment_payload_v2("10")),
+        payment_requirements: sample_requirements_v2("10"),
+    };
+
+    let response = router
+        .oneshot(post_json("/verify", &request_body))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: VerifyResponse = serde_json::from_slice(&body).unwrap();
+    assert!(payload.is_valid);
+    assert!(payload.certificate.is_none());
+    assert_eq!(verifier.verify_calls(), 0);
+    assert_eq!(issuer.issue_calls(), 0);
+}
+
+#[tokio::test]
 async fn settle_endpoint_returns_certificate() {
     let verifier = Arc::new(MockVerifier::success());
     let issuer = Arc::new(MockIssuer::success());
@@ -101,8 +131,39 @@ async fn settle_endpoint_returns_certificate() {
 
     let request_body = SettleRequest {
         x402_version: 1,
-        payment_header: encoded_header(),
+        payment_header: Some(encoded_header()),
+        payment_payload: None,
         payment_requirements: sample_requirements(),
+    };
+
+    let response = router
+        .oneshot(post_json("/settle", &request_body))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: SettleResponse = serde_json::from_slice(&body).unwrap();
+    assert!(payload.success);
+    assert!(payload.certificate.is_some());
+    assert!(payload.tx_hash.is_none());
+    assert_eq!(payload.network_id.as_deref(), Some("sepolia-mainnet"));
+    assert_eq!(verifier.verify_calls(), 1);
+    assert_eq!(issuer.issue_calls(), 1);
+}
+
+#[tokio::test]
+async fn settle_endpoint_accepts_v2_payload() {
+    let verifier = Arc::new(MockVerifier::success());
+    let issuer = Arc::new(MockIssuer::success());
+    let state = test_state(verifier.clone(), issuer.clone());
+    let router = build_router(state);
+
+    let request_body = SettleRequest {
+        x402_version: 2,
+        payment_header: None,
+        payment_payload: Some(payment_payload_v2("10")),
+        payment_requirements: sample_requirements_v2("10"),
     };
 
     let response = router
@@ -142,8 +203,10 @@ async fn supported_endpoint_returns_configured_kind() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let payload: Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(payload["kinds"][0]["scheme"], "4mica-credit");
-    assert_eq!(payload["kinds"][0]["network"], "sepolia-mainnet");
+    let kinds = payload["kinds"].as_array().expect("kinds array");
+    assert!(kinds
+        .iter()
+        .any(|k| k["scheme"] == "4mica-credit" && k["network"] == "sepolia-mainnet"));
 }
 
 #[tokio::test]
@@ -180,9 +243,38 @@ async fn supported_includes_exact_when_available() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let payload: Value = serde_json::from_slice(&body).unwrap();
     let kinds = payload["kinds"].as_array().expect("kinds array");
-    assert_eq!(kinds.len(), 2);
+    assert_eq!(kinds.len(), 3);
     assert!(kinds.iter().any(|k| k["scheme"] == "4mica-credit"));
     assert!(kinds.iter().any(|k| k["scheme"] == "exact"));
+}
+
+#[tokio::test]
+async fn supported_includes_v2_kind() {
+    let verifier = Arc::new(MockVerifier::success());
+    let issuer = Arc::new(MockIssuer::success());
+    let state = test_state(verifier, issuer);
+    let router = build_router(state);
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/supported")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    let kinds = payload["kinds"].as_array().expect("kinds array");
+    assert!(kinds.iter().any(|k| {
+        k["scheme"] == "4mica-credit"
+            && k["network"] == "sepolia-mainnet"
+            && k["x402Version"] == 2
+    }));
 }
 
 #[tokio::test]
@@ -312,7 +404,8 @@ async fn verify_rejects_invalid_version() {
 
     let request_body = VerifyRequest {
         x402_version: 99,
-        payment_header: encoded_header(),
+        payment_header: Some(encoded_header()),
+        payment_payload: None,
         payment_requirements: sample_requirements(),
     };
 
@@ -343,8 +436,38 @@ async fn verify_rejects_mismatched_amount() {
 
     let request_body = VerifyRequest {
         x402_version: 1,
-        payment_header: encoded_header(),
+        payment_header: Some(encoded_header()),
+        payment_payload: None,
         payment_requirements: requirements,
+    };
+
+    let response = router
+        .oneshot(post_json("/verify", &request_body))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: VerifyResponse = serde_json::from_slice(&body).unwrap();
+    assert!(!payload.is_valid);
+    let reason = payload.invalid_reason.expect("reason");
+    assert!(reason.contains("claim amount"));
+    assert_eq!(verifier.verify_calls(), 0);
+    assert_eq!(issuer.issue_calls(), 0);
+}
+
+#[tokio::test]
+async fn verify_rejects_v2_mismatched_amount() {
+    let verifier = Arc::new(MockVerifier::success());
+    let issuer = Arc::new(MockIssuer::success());
+    let state = test_state(verifier.clone(), issuer.clone());
+    let router = build_router(state);
+
+    let request_body = VerifyRequest {
+        x402_version: 2,
+        payment_header: None,
+        payment_payload: Some(payment_payload_v2("10")),
+        payment_requirements: sample_requirements_v2("11"),
     };
 
     let response = router
@@ -371,7 +494,8 @@ async fn settle_propagates_issue_errors() {
 
     let request_body = SettleRequest {
         x402_version: 1,
-        payment_header: encoded_header(),
+        payment_header: Some(encoded_header()),
+        payment_payload: None,
         payment_requirements: sample_requirements(),
     };
 
@@ -398,7 +522,8 @@ async fn settle_propagates_certificate_errors() {
 
     let request_body = SettleRequest {
         x402_version: 1,
-        payment_header: encoded_header(),
+        payment_header: Some(encoded_header()),
+        payment_payload: None,
         payment_requirements: sample_requirements(),
     };
 
@@ -425,7 +550,8 @@ async fn settle_rejects_invalid_version() {
 
     let request_body = SettleRequest {
         x402_version: 99,
-        payment_header: encoded_header(),
+        payment_header: Some(encoded_header()),
+        payment_payload: None,
         payment_requirements: sample_requirements(),
     };
 
@@ -469,6 +595,27 @@ fn sample_requirements() -> PaymentRequirements {
         scheme: "4mica-credit".into(),
         network: "sepolia-mainnet".into(),
         max_amount_required: "10".into(),
+        amount: None,
+        resource: None,
+        description: None,
+        mime_type: None,
+        output_schema: None,
+        pay_to: format!("{:#x}", recipient_address()),
+        max_timeout_seconds: None,
+        asset: format!("{:#x}", asset_address()),
+        extra: Some(json!({
+            "tabId": "0x1",
+            "userAddress": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        })),
+    }
+}
+
+fn sample_requirements_v2(amount: &str) -> PaymentRequirements {
+    PaymentRequirements {
+        scheme: "4mica-credit".into(),
+        network: "sepolia-mainnet".into(),
+        max_amount_required: "".into(),
+        amount: Some(amount.into()),
         resource: None,
         description: None,
         mime_type: None,
@@ -508,6 +655,35 @@ fn encoded_header() -> String {
         })
         .to_string(),
     )
+}
+
+fn payment_payload_v2(amount: &str) -> Value {
+    let recipient = format!("{:#x}", recipient_address());
+    let asset = format!("{:#x}", asset_address());
+    json!({
+        "x402Version": 2,
+        "accepted": {
+            "scheme": "4mica-credit",
+            "network": "sepolia-mainnet",
+            "amount": amount,
+            "payTo": recipient,
+            "asset": asset
+        },
+        "payload": {
+            "claims": {
+                "version": "v1",
+                "user_address": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "recipient_address": recipient,
+                "tab_id": "0x1",
+                "req_id": "0x0",
+                "amount": amount,
+                "asset_address": asset,
+                "timestamp": 1
+            },
+            "signature": "0x1111",
+            "scheme": "eip712"
+        }
+    })
 }
 
 fn post_json<T: Serialize>(uri: &str, payload: &T) -> Request<Body> {
@@ -652,11 +828,13 @@ async fn verify_routes_to_exact_service() {
 
     let request_body = VerifyRequest {
         x402_version: 1,
-        payment_header: BASE64_STANDARD.encode("dummy"),
+        payment_header: Some(BASE64_STANDARD.encode("dummy")),
+        payment_payload: None,
         payment_requirements: PaymentRequirements {
             scheme: "exact".into(),
             network: "base".into(),
             max_amount_required: "1000".into(),
+            amount: None,
             resource: None,
             description: None,
             mime_type: None,
@@ -689,11 +867,13 @@ async fn settle_routes_to_exact_service() {
 
     let request_body = SettleRequest {
         x402_version: 1,
-        payment_header: BASE64_STANDARD.encode("dummy"),
+        payment_header: Some(BASE64_STANDARD.encode("dummy")),
+        payment_payload: None,
         payment_requirements: PaymentRequirements {
             scheme: "exact".into(),
             network: "base".into(),
             max_amount_required: "1000".into(),
+            amount: None,
             resource: None,
             description: None,
             mime_type: None,

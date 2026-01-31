@@ -49,6 +49,9 @@ fn convert_requirements(req: &PaymentRequirements) -> serde_json::Value {
         "maxAmountRequired".into(),
         JsonValue::String(req.max_amount_required.clone()),
     );
+    if let Some(amount) = &req.amount {
+        map.insert("amount".into(), JsonValue::String(amount.clone()));
+    }
     map.insert(
         "resource".into(),
         JsonValue::String(req.resource.clone().unwrap_or_default()),
@@ -89,11 +92,19 @@ fn convert_verify_request(
 ) -> Result<proto::VerifyRequest, ValidationError> {
     use serde_json::{Map, Value as JsonValue};
 
-    if request.x402_version != 1 {
+    if request.x402_version != 1 && request.x402_version != 2 {
         return Err(ValidationError::UnsupportedVersion(request.x402_version));
     }
 
-    let payload = decode_payment_payload(&request.payment_header)?;
+    let payload = if let Some(payload) = &request.payment_payload {
+        payload.clone()
+    } else if let Some(header) = request.payment_header.as_deref() {
+        decode_payment_payload(header)?
+    } else {
+        return Err(ValidationError::InvalidHeader(
+            "paymentHeader or paymentPayload is required".into(),
+        ));
+    };
     let payment_requirements = convert_requirements(&request.payment_requirements);
 
     let mut map = Map::new();
@@ -113,6 +124,7 @@ fn convert_settle_request(
     convert_verify_request(&VerifyRequest {
         x402_version: request.x402_version,
         payment_header: request.payment_header.clone(),
+        payment_payload: request.payment_payload.clone(),
         payment_requirements: request.payment_requirements.clone(),
     })
 }
@@ -388,11 +400,13 @@ mod tests {
     fn sample_verify_request() -> VerifyRequest {
         VerifyRequest {
             x402_version: 1,
-            payment_header: "header".into(),
+            payment_header: Some("header".into()),
+            payment_payload: None,
             payment_requirements: PaymentRequirements {
                 scheme: "exact".into(),
                 network: "base".into(),
                 max_amount_required: "1000".into(),
+                amount: None,
                 resource: None,
                 description: None,
                 mime_type: None,
@@ -409,7 +423,8 @@ mod tests {
     fn sample_settle_request() -> SettleRequest {
         SettleRequest {
             x402_version: 1,
-            payment_header: "header".into(),
+            payment_header: Some("header".into()),
+            payment_payload: None,
             payment_requirements: sample_verify_request().payment_requirements,
         }
     }
