@@ -49,7 +49,19 @@ async fn verify_handler(
     State(state): State<SharedState>,
     Json(request): Json<VerifyRequest>,
 ) -> impl IntoResponse {
-    if let Err(err) = state.validate_version(request.x402_version) {
+    let x402_version = match request.resolved_x402_version() {
+        Ok(version) => version,
+        Err(err) => {
+            warn!(reason = %err, "verify request rejected");
+            return Json(VerifyResponse {
+                is_valid: false,
+                invalid_reason: Some(err.to_string()),
+                certificate: None,
+            });
+        }
+    };
+
+    if let Err(err) = state.validate_version(x402_version) {
         warn!(reason = %err, "verify request rejected");
         return Json(VerifyResponse {
             is_valid: false,
@@ -58,7 +70,7 @@ async fn verify_handler(
         });
     }
 
-    match state.verify(&request).await {
+    match state.verify(&request, x402_version).await {
         Ok(response) => Json(response),
         Err(err) => {
             warn!(reason = %err, "payment validation failed");
@@ -75,12 +87,20 @@ async fn settle_handler(
     State(state): State<SharedState>,
     Json(request): Json<SettleRequest>,
 ) -> impl IntoResponse {
-    if let Err(err) = state.validate_version(request.x402_version) {
+    let x402_version = match request.resolved_x402_version() {
+        Ok(version) => version,
+        Err(err) => {
+            warn!(reason = %err, "settle request rejected");
+            return Json(SettleResponse::invalid(err.to_string(), state.network()));
+        }
+    };
+
+    if let Err(err) = state.validate_version(x402_version) {
         warn!(reason = %err, "settle request rejected");
         return Json(SettleResponse::invalid(err.to_string(), state.network()));
     }
 
-    match state.settle(&request).await {
+    match state.settle(&request, x402_version).await {
         Ok(response) => {
             if let Some(tx_hash) = response.tx_hash.as_deref() {
                 info!(tx_hash, "settlement forwarded to on-chain handler");

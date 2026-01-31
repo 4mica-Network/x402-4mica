@@ -84,8 +84,9 @@ fn convert_verify_request(
 ) -> Result<proto::VerifyRequest, ValidationError> {
     use serde_json::{Map, Value as JsonValue};
 
-    if request.x402_version != 1 && request.x402_version != 2 {
-        return Err(ValidationError::UnsupportedVersion(request.x402_version));
+    let x402_version = request.resolved_x402_version()?;
+    if x402_version != 1 && x402_version != 2 {
+        return Err(ValidationError::UnsupportedVersion(x402_version));
     }
 
     let payload = request.payment_payload.clone();
@@ -94,7 +95,7 @@ fn convert_verify_request(
     let mut map = Map::new();
     map.insert(
         "x402Version".into(),
-        JsonValue::Number(serde_json::Number::from(request.x402_version as u64)),
+        JsonValue::Number(serde_json::Number::from(x402_version as u64)),
     );
     map.insert("paymentPayload".into(), payload);
     map.insert("paymentRequirements".into(), payment_requirements);
@@ -382,7 +383,7 @@ mod tests {
     #[allow(dead_code)]
     fn sample_verify_request() -> VerifyRequest {
         VerifyRequest {
-            x402_version: 1,
+            x402_version: Some(1),
             payment_payload: serde_json::json!({
                 "x402Version": 1,
                 "scheme": "exact",
@@ -409,7 +410,7 @@ mod tests {
     #[allow(dead_code)]
     fn sample_settle_request() -> SettleRequest {
         SettleRequest {
-            x402_version: 1,
+            x402_version: Some(1),
             payment_payload: serde_json::json!({
                 "x402Version": 1,
                 "scheme": "exact",

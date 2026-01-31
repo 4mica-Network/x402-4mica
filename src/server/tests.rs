@@ -33,7 +33,34 @@ async fn verify_endpoint_accepts_valid_payload() {
     let router = build_router(state);
 
     let request_body = VerifyRequest {
-        x402_version: 1,
+        x402_version: Some(1),
+        payment_payload: payment_payload_v1("10"),
+        payment_requirements: sample_requirements(),
+    };
+
+    let response = router
+        .oneshot(post_json("/verify", &request_body))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: VerifyResponse = serde_json::from_slice(&body).unwrap();
+    assert!(payload.is_valid);
+    assert!(payload.certificate.is_none());
+    assert_eq!(verifier.verify_calls(), 0);
+    assert_eq!(issuer.issue_calls(), 0);
+}
+
+#[tokio::test]
+async fn verify_accepts_payload_without_top_level_version() {
+    let verifier = Arc::new(MockVerifier::success());
+    let issuer = Arc::new(MockIssuer::success());
+    let state = test_state(verifier.clone(), issuer.clone());
+    let router = build_router(state);
+
+    let request_body = VerifyRequest {
+        x402_version: None,
         payment_payload: payment_payload_v1("10"),
         payment_requirements: sample_requirements(),
     };
@@ -60,7 +87,7 @@ async fn verify_accepts_duplicate_payloads() {
     let router = build_router(state);
 
     let request_body = VerifyRequest {
-        x402_version: 1,
+        x402_version: Some(1),
         payment_payload: payment_payload_v1("10"),
         payment_requirements: sample_requirements(),
     };
@@ -98,7 +125,7 @@ async fn verify_endpoint_accepts_v2_payload() {
     let router = build_router(state);
 
     let request_body = VerifyRequest {
-        x402_version: 2,
+        x402_version: Some(2),
         payment_payload: payment_payload_v2("10"),
         payment_requirements: sample_requirements_v2("10"),
     };
@@ -125,9 +152,38 @@ async fn settle_endpoint_returns_certificate() {
     let router = build_router(state);
 
     let request_body = SettleRequest {
-        x402_version: 1,
+        x402_version: Some(1),
         payment_payload: payment_payload_v1("10"),
         payment_requirements: sample_requirements(),
+    };
+
+    let response = router
+        .oneshot(post_json("/settle", &request_body))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: SettleResponse = serde_json::from_slice(&body).unwrap();
+    assert!(payload.success);
+    assert!(payload.certificate.is_some());
+    assert!(payload.tx_hash.is_none());
+    assert_eq!(payload.network_id.as_deref(), Some("sepolia-mainnet"));
+    assert_eq!(verifier.verify_calls(), 1);
+    assert_eq!(issuer.issue_calls(), 1);
+}
+
+#[tokio::test]
+async fn settle_accepts_payload_without_top_level_version() {
+    let verifier = Arc::new(MockVerifier::success());
+    let issuer = Arc::new(MockIssuer::success());
+    let state = test_state(verifier.clone(), issuer.clone());
+    let router = build_router(state);
+
+    let request_body = SettleRequest {
+        x402_version: None,
+        payment_payload: payment_payload_v2("10"),
+        payment_requirements: sample_requirements_v2("10"),
     };
 
     let response = router
@@ -154,7 +210,7 @@ async fn settle_endpoint_accepts_v2_payload() {
     let router = build_router(state);
 
     let request_body = SettleRequest {
-        x402_version: 2,
+        x402_version: Some(2),
         payment_payload: payment_payload_v2("10"),
         payment_requirements: sample_requirements_v2("10"),
     };
@@ -396,8 +452,10 @@ async fn verify_rejects_invalid_version() {
     let router = build_router(state);
 
     let request_body = VerifyRequest {
-        x402_version: 99,
-        payment_payload: payment_payload_v1("10"),
+        x402_version: Some(99),
+        payment_payload: json!({
+            "x402Version": 99
+        }),
         payment_requirements: sample_requirements(),
     };
 
@@ -427,7 +485,7 @@ async fn verify_rejects_mismatched_amount() {
     requirements.max_amount_required = "11".into();
 
     let request_body = VerifyRequest {
-        x402_version: 1,
+        x402_version: Some(1),
         payment_payload: payment_payload_v1("10"),
         payment_requirements: requirements,
     };
@@ -455,7 +513,7 @@ async fn verify_rejects_v2_mismatched_amount() {
     let router = build_router(state);
 
     let request_body = VerifyRequest {
-        x402_version: 2,
+        x402_version: Some(2),
         payment_payload: payment_payload_v2("10"),
         payment_requirements: sample_requirements_v2("11"),
     };
@@ -483,7 +541,7 @@ async fn settle_propagates_issue_errors() {
     let router = build_router(state);
 
     let request_body = SettleRequest {
-        x402_version: 1,
+        x402_version: Some(1),
         payment_payload: payment_payload_v1("10"),
         payment_requirements: sample_requirements(),
     };
@@ -510,7 +568,7 @@ async fn settle_propagates_certificate_errors() {
     let router = build_router(state);
 
     let request_body = SettleRequest {
-        x402_version: 1,
+        x402_version: Some(1),
         payment_payload: payment_payload_v1("10"),
         payment_requirements: sample_requirements(),
     };
@@ -537,8 +595,10 @@ async fn settle_rejects_invalid_version() {
     let router = build_router(state);
 
     let request_body = SettleRequest {
-        x402_version: 99,
-        payment_payload: payment_payload_v1("10"),
+        x402_version: Some(99),
+        payment_payload: json!({
+            "x402Version": 99
+        }),
         payment_requirements: sample_requirements(),
     };
 
@@ -815,7 +875,7 @@ async fn verify_routes_to_exact_service() {
     let router = build_router(state);
 
     let request_body = VerifyRequest {
-        x402_version: 1,
+        x402_version: Some(1),
         payment_payload: payment_payload_v1_with_scheme("exact", "base", "10"),
         payment_requirements: PaymentRequirements {
             scheme: "exact".into(),
@@ -853,7 +913,7 @@ async fn settle_routes_to_exact_service() {
     let router = build_router(state);
 
     let request_body = SettleRequest {
-        x402_version: 1,
+        x402_version: Some(1),
         payment_payload: payment_payload_v1_with_scheme("exact", "base", "10"),
         payment_requirements: PaymentRequirements {
             scheme: "exact".into(),

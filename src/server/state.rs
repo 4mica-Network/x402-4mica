@@ -140,12 +140,16 @@ impl AppState {
         kinds
     }
 
-    pub async fn verify(&self, request: &VerifyRequest) -> Result<VerifyResponse, ValidationError> {
+    pub async fn verify(
+        &self,
+        request: &VerifyRequest,
+        x402_version: u8,
+    ) -> Result<VerifyResponse, ValidationError> {
         let scheme = &request.payment_requirements.scheme;
         let network = &request.payment_requirements.network;
 
         if let Some(handler) = self.handler_for(scheme, network) {
-            return handler.verify(request).await;
+            return handler.verify(request, x402_version).await;
         }
 
         if let Some(exact) = &self.exact {
@@ -177,12 +181,16 @@ impl AppState {
         Err(ValidationError::UnsupportedScheme(scheme.clone()))
     }
 
-    pub async fn settle(&self, request: &SettleRequest) -> Result<SettleResponse, ValidationError> {
+    pub async fn settle(
+        &self,
+        request: &SettleRequest,
+        x402_version: u8,
+    ) -> Result<SettleResponse, ValidationError> {
         let scheme = &request.payment_requirements.scheme;
         let network = &request.payment_requirements.network;
 
         if let Some(handler) = self.handler_for(scheme, network) {
-            return handler.settle(request).await;
+            return handler.settle(request, x402_version).await;
         }
 
         if let Some(exact) = &self.exact {
@@ -264,13 +272,13 @@ impl FourMicaHandler {
         }
     }
 
-    async fn verify(&self, request: &VerifyRequest) -> Result<VerifyResponse, ValidationError> {
-        let payload = self.extract_payload(request)?;
-        self.validate_payment_payload(
-            &payload,
-            &request.payment_requirements,
-            request.x402_version,
-        )?;
+    async fn verify(
+        &self,
+        request: &VerifyRequest,
+        x402_version: u8,
+    ) -> Result<VerifyResponse, ValidationError> {
+        let payload = self.extract_payload(request, x402_version)?;
+        self.validate_payment_payload(&payload, &request.payment_requirements, x402_version)?;
 
         Ok(VerifyResponse {
             is_valid: true,
@@ -279,13 +287,13 @@ impl FourMicaHandler {
         })
     }
 
-    async fn settle(&self, request: &SettleRequest) -> Result<SettleResponse, ValidationError> {
-        let payload = self.extract_payload_for_settle(request)?;
-        self.validate_payment_payload(
-            &payload,
-            &request.payment_requirements,
-            request.x402_version,
-        )?;
+    async fn settle(
+        &self,
+        request: &SettleRequest,
+        x402_version: u8,
+    ) -> Result<SettleResponse, ValidationError> {
+        let payload = self.extract_payload_for_settle(request, x402_version)?;
+        self.validate_payment_payload(&payload, &request.payment_requirements, x402_version)?;
 
         let certificate = self
             .issuer
@@ -320,9 +328,10 @@ impl FourMicaHandler {
     fn extract_payload(
         &self,
         request: &VerifyRequest,
+        x402_version: u8,
     ) -> Result<PaymentGuaranteeRequest, ValidationError> {
         self.extract_payload_parts(
-            request.x402_version,
+            x402_version,
             &request.payment_payload,
             &request.payment_requirements,
         )
@@ -331,9 +340,10 @@ impl FourMicaHandler {
     fn extract_payload_for_settle(
         &self,
         request: &SettleRequest,
+        x402_version: u8,
     ) -> Result<PaymentGuaranteeRequest, ValidationError> {
         self.extract_payload_parts(
-            request.x402_version,
+            x402_version,
             &request.payment_payload,
             &request.payment_requirements,
         )
@@ -739,7 +749,8 @@ pub struct CreateTabResponse {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct VerifyRequest {
     #[serde(rename = "x402Version")]
-    pub x402_version: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x402_version: Option<u8>,
     #[serde(rename = "paymentPayload")]
     pub payment_payload: Value,
     #[serde(rename = "paymentRequirements")]
@@ -749,11 +760,24 @@ pub struct VerifyRequest {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SettleRequest {
     #[serde(rename = "x402Version")]
-    pub x402_version: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x402_version: Option<u8>,
     #[serde(rename = "paymentPayload")]
     pub payment_payload: Value,
     #[serde(rename = "paymentRequirements")]
     pub payment_requirements: PaymentRequirements,
+}
+
+impl VerifyRequest {
+    pub(crate) fn resolved_x402_version(&self) -> Result<u8, ValidationError> {
+        resolve_x402_version(self.x402_version, &self.payment_payload)
+    }
+}
+
+impl SettleRequest {
+    pub(crate) fn resolved_x402_version(&self) -> Result<u8, ValidationError> {
+        resolve_x402_version(self.x402_version, &self.payment_payload)
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -826,6 +850,34 @@ impl SettleResponse {
             network_id: Some(network.to_string()),
             certificate: Some(certificate),
         }
+    }
+}
+
+fn extract_payload_x402_version(payload: &Value) -> Option<u8> {
+    match payload.get("x402Version")? {
+        Value::Number(value) => value.as_u64().and_then(|raw| u8::try_from(raw).ok()),
+        Value::String(value) => value.parse::<u8>().ok(),
+        _ => None,
+    }
+}
+
+fn resolve_x402_version(
+    request_version: Option<u8>,
+    payment_payload: &Value,
+) -> Result<u8, ValidationError> {
+    let payload_version = extract_payload_x402_version(payment_payload);
+    match (request_version, payload_version) {
+        (Some(request_version), Some(payload_version)) if request_version != payload_version => {
+            Err(ValidationError::InvalidHeader(format!(
+                "x402Version {} does not match paymentPayload x402Version {}",
+                request_version, payload_version
+            )))
+        }
+        (Some(request_version), _) => Ok(request_version),
+        (None, Some(payload_version)) => Ok(payload_version),
+        (None, None) => Err(ValidationError::InvalidHeader(
+            "x402Version missing from request and paymentPayload".into(),
+        )),
     }
 }
 
