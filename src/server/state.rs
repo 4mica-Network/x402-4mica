@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     str::FromStr,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
@@ -688,11 +689,17 @@ pub struct SupportedKind {
 #[serde(rename_all = "camelCase")]
 pub struct SupportedResponse {
     pub kinds: Vec<SupportedKind>,
+    pub extensions: Vec<String>,
+    pub signers: HashMap<String, Vec<String>>,
 }
 
 impl SupportedResponse {
     pub fn new(kinds: Vec<SupportedKind>) -> Self {
-        Self { kinds }
+        Self {
+            kinds,
+            extensions: Vec::new(),
+            signers: HashMap::new(),
+        }
     }
 }
 
