@@ -55,6 +55,7 @@ pub struct X402PaymentPayloadV2 {
     pub payload: PaymentGuaranteeRequestCompat,
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum X402PaymentPayload {
