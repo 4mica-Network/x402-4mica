@@ -10,9 +10,10 @@ use std::sync::Arc;
 use anyhow::Context;
 
 use crate::config::{ServiceConfig, load_public_params};
+use crate::exact::ExactService;
 use crate::exact::try_from_env as build_exact_service;
 use crate::issuer::{GuaranteeIssuer, LiveGuaranteeIssuer};
-use crate::server::state::{AppState, CoreTabService, ExactService, FourMicaHandler, TabService};
+use crate::server::state::{AppState, CoreTabService, FourMicaHandler, TabService};
 use crate::verifier::{CertificateValidator, CertificateVerifier};
 
 #[tokio::main]

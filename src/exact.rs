@@ -10,12 +10,12 @@ use x402_rs::facilitator::Facilitator;
 use x402_rs::facilitator_local::FacilitatorLocal;
 use x402_rs::proto::{self, SupportedPaymentKind};
 use x402_rs::scheme::{SchemeBlueprints, SchemeRegistry};
-use x402_rs::util::Base64Bytes;
 
-use crate::server::state::{
-    ExactService, PaymentRequirements, SettleRequest, SettleResponse, SupportedKind,
-    ValidationError, VerifyRequest, VerifyResponse,
+use crate::server::model::{
+    PaymentRequirements, SettleRequest, SettleResponse, SupportedKind, VerifyRequest,
+    VerifyResponse,
 };
+use crate::server::state::ValidationError;
 
 const ENV_DEBIT_URL: &str = "X402_DEBIT_URL";
 const ENV_CONFIG_PATH: &str = "X402_CONFIG_PATH";
@@ -49,6 +49,9 @@ fn convert_requirements(req: &PaymentRequirements) -> serde_json::Value {
         "maxAmountRequired".into(),
         JsonValue::String(req.max_amount_required.clone()),
     );
+    if let Some(amount) = &req.amount {
+        map.insert("amount".into(), JsonValue::String(amount.clone()));
+    }
     map.insert(
         "resource".into(),
         JsonValue::String(req.resource.clone().unwrap_or_default()),
@@ -77,31 +80,28 @@ fn convert_requirements(req: &PaymentRequirements) -> serde_json::Value {
     JsonValue::Object(map)
 }
 
-fn decode_payment_payload(header: &str) -> Result<serde_json::Value, ValidationError> {
-    let bytes = Base64Bytes::from(header.as_bytes())
-        .decode()
-        .map_err(|err| ValidationError::InvalidHeader(err.to_string()))?;
-    serde_json::from_slice(&bytes).map_err(|err| ValidationError::InvalidHeader(err.to_string()))
-}
-
 fn convert_verify_request(
     request: &VerifyRequest,
 ) -> Result<proto::VerifyRequest, ValidationError> {
     use serde_json::{Map, Value as JsonValue};
 
-    if request.x402_version != 1 {
-        return Err(ValidationError::UnsupportedVersion(request.x402_version));
+    let x402_version = request.resolved_x402_version()?;
+    if x402_version != 1 && x402_version != 2 {
+        return Err(ValidationError::UnsupportedVersion(x402_version));
     }
 
-    let payload = decode_payment_payload(&request.payment_header)?;
+    let payload = request.payment_payload.clone();
     let payment_requirements = convert_requirements(&request.payment_requirements);
 
     let mut map = Map::new();
     map.insert(
         "x402Version".into(),
-        JsonValue::Number(serde_json::Number::from(request.x402_version as u64)),
+        JsonValue::Number(serde_json::Number::from(x402_version as u64)),
     );
-    map.insert("paymentPayload".into(), payload);
+    map.insert(
+        "paymentPayload".into(),
+        serde_json::to_value(payload).map_err(|err| ValidationError::Other(err.into()))?,
+    );
     map.insert("paymentRequirements".into(), payment_requirements);
 
     Ok(proto::VerifyRequest::from(JsonValue::Object(map)))
@@ -112,7 +112,7 @@ fn convert_settle_request(
 ) -> Result<proto::SettleRequest, ValidationError> {
     convert_verify_request(&VerifyRequest {
         x402_version: request.x402_version,
-        payment_header: request.payment_header.clone(),
+        payment_payload: request.payment_payload.clone(),
         payment_requirements: request.payment_requirements.clone(),
     })
 }
@@ -131,6 +131,13 @@ pub async fn try_from_env() -> anyhow::Result<Option<Arc<dyn ExactService>>> {
             Ok(None)
         }
     }
+}
+
+#[async_trait]
+pub(crate) trait ExactService: Send + Sync {
+    async fn verify(&self, request: &VerifyRequest) -> Result<VerifyResponse, ValidationError>;
+    async fn settle(&self, request: &SettleRequest) -> Result<SettleResponse, ValidationError>;
+    async fn supported(&self) -> Result<Vec<SupportedKind>, ValidationError>;
 }
 
 struct LocalExactService {
@@ -383,36 +390,6 @@ mod tests {
     use super::*;
     use serial_test::serial;
     use std::env;
-
-    #[allow(dead_code)]
-    fn sample_verify_request() -> VerifyRequest {
-        VerifyRequest {
-            x402_version: 1,
-            payment_header: "header".into(),
-            payment_requirements: PaymentRequirements {
-                scheme: "exact".into(),
-                network: "base".into(),
-                max_amount_required: "1000".into(),
-                resource: None,
-                description: None,
-                mime_type: None,
-                output_schema: None,
-                pay_to: "0x0000000000000000000000000000000000000008".into(),
-                max_timeout_seconds: Some(30),
-                asset: "0x0000000000000000000000000000000000000009".into(),
-                extra: None,
-            },
-        }
-    }
-
-    #[allow(dead_code)]
-    fn sample_settle_request() -> SettleRequest {
-        SettleRequest {
-            x402_version: 1,
-            payment_header: "header".into(),
-            payment_requirements: sample_verify_request().payment_requirements,
-        }
-    }
 
     fn set_debit_url(url: &str) {
         unsafe { env::set_var(ENV_DEBIT_URL, url) };

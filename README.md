@@ -10,7 +10,7 @@
 </p>
 
 A facilitator for the x402 protocol that runs the 4mica credit flow. Resource servers call it to
-open tabs, validate `X-PAYMENT` headers against their `paymentRequirements`, and settle by returning
+open tabs, validate payment payloads against their `paymentRequirements`, and settle by returning
 the BLS certificate to the recipient.
 
 
@@ -25,8 +25,8 @@ the BLS certificate to the recipient.
 
 - Configure the 4mica facilitator (for example `https://x402.4mica.xyz/`) and choose a POST tab endpoint on your API (e.g. `POST https://api.example.com/x402/tab`). Your `402 Payment Required` responses should advertise `scheme = "4mica-credit"`, a supported `network`, and set `payTo` / `asset` / `maxAmountRequired`, embedding your tab endpoint in `paymentRequirements.extra.tabEndpoint`.
 - Implement the tab endpoint to accept `{ userAddress, paymentRequirements }`. For each call, open or reuse a tab by calling the facilitator’s standard `POST /tabs` with `{ userAddress, recipientAddress = payTo, erc20Token = asset, ttlSeconds? }`, then return the tab response (at least `tabId` and `userAddress`) to the client. Cache tabs per (user, recipient, asset) if you want to avoid unnecessary `/tabs` calls – the facilitator will return the existing tab for that combination either way.
-- Clients combine this tab with your original `paymentRequirements` to build and sign a guarantee, producing a base64-encoded `X-PAYMENT` header that they send on the retried request for the protected resource. You never construct this header yourself; you only need to validate and consume it.
-- When a request arrives with `X-PAYMENT`, base64-decode the header into the standard x402 payment envelope and send its payment payload together with the original `paymentRequirements` to the facilitator’s `/verify` and `/settle` endpoints. Use `/verify` as an optional preflight check before doing work, and `/settle` once you are ready to accept credit and obtain the BLS certificate for downstream remuneration.
+- Clients combine this tab with your original `paymentRequirements` to build and sign a guarantee, producing the x402 `paymentPayload` that they send on the retried request for the protected resource. You never construct this payload yourself; you only need to validate and consume it.
+- When a request arrives with a payment payload, send it together with the original `paymentRequirements` to the facilitator’s `/verify` and `/settle` endpoints. Use `/verify` as an optional preflight check before doing work, and `/settle` once you are ready to accept credit and obtain the BLS certificate for downstream remuneration.
 
 ### Quick integration (clients)
 
@@ -53,7 +53,7 @@ the BLS certificate to the recipient.
       requirements = PaymentRequirements.from_raw(req_raw)
 
       payment = await flow.sign_payment(requirements, user_address)
-      headers = {"X-PAYMENT": payment.header}  # base64 string to send with the retry
+      headers = {"X-PAYMENT": payment.header}  # client retry header (decode to paymentPayload for /verify)
       await client.aclose()
 
   asyncio.run(main())
@@ -77,7 +77,7 @@ the BLS certificate to the recipient.
     const requirements = PaymentRequirements.fromRaw(reqRaw);
 
     const payment = await flow.signPayment(requirements, "0xUser");
-    const headers = { "X-PAYMENT": payment.header };
+    const headers = { "X-PAYMENT": payment.header }; // decode to paymentPayload for /verify
     await client.aclose();
   }
 
@@ -93,8 +93,8 @@ the BLS certificate to the recipient.
 You can pair the client with `examples/server/mock_paid_api.py`, a FastAPI server that simulates a
 paywalled endpoint. Start it with `python examples/server/mock_paid_api.py` (set `PORT` to override
 the default `9000`). The mock resource will call the facilitator’s `/verify` endpoint (defaulting to
-`https://x402.4mica.xyz/`; override with `FACILITATOR_URL`) whenever it receives an `X-PAYMENT`
-header.
+`https://x402.4mica.xyz/`; override with `FACILITATOR_URL`) whenever it receives a payment payload
+(for example decoded from an `X-PAYMENT` header).
 
 The bundled Rust example shows how to sign a payment
 header with `rust-sdk-4mica`:
@@ -109,9 +109,9 @@ Python counterpart lives in `examples/python_client/client.py` (install deps wit
 examples/python_client/requirements.txt`). A TypeScript version lives in `examples/ts_client`
 (`npm install && npm start`).
 
-### X-PAYMENT header schema
+### Payment payload schema (v1)
 
-`X-PAYMENT` must be a base64-encoded JSON envelope:
+`paymentPayload` is a JSON envelope:
 
 ```json
 {
@@ -155,7 +155,7 @@ The facilitator enforces that:
     their wallet; the facilitator reuses the existing tab for that pair whenever possible.
     `nextReqId` is the next sequential request id to include when signing a guarantee.
 - `POST /verify`
-  - Request: `{ "x402Version": 1, "paymentHeader": "<base64 X-PAYMENT>", "paymentRequirements": { ... } }`.
+  - Request: `{ "x402Version": 1, "paymentPayload": { ... }, "paymentRequirements": { ... } }`.
   - Response: `{ "isValid": true|false, "invalidReason"?, "certificate": null }`.
 - `POST /settle`
   - Request: same shape as `/verify`.
@@ -186,21 +186,21 @@ x402-4mica and the 4mica core service.
      the client inside `paymentRequirements` along with the latest `nextReqId`.
 3. **Client signs a guarantee**
    - Client builds the JSON payload that matches the resource requirements, signs it with their
-     private key (EIP‑712 by default; EIP‑191 is also accepted), and wraps the result in a base64
-     `X-PAYMENT` header.
+     private key (EIP‑712 by default; EIP‑191 is also accepted) to produce the x402
+     `paymentPayload`.
 4. **Client retries the protected call**
-   - Client → Recipient resource: same HTTP request plus `X-PAYMENT: <base64 envelope>`.
-5. **Recipient verifies the header**
+   - Client → Recipient resource: same HTTP request plus the payment payload (via header or body).
+5. **Recipient verifies the payload**
    - Recipient → Facilitator: `POST /verify` with
-     `{ x402Version, paymentHeader, paymentRequirements }`.
-   - Facilitator: decodes `paymentHeader`, ensures `scheme`/`network` match `/supported`, confirms
-     the claims reference the advertised tab, user, asset, `payTo`, and that `amount` exactly equals
-     `maxAmountRequired`.
+     `{ x402Version, paymentPayload, paymentRequirements }`.
+   - Facilitator: validates the payment payload, ensures `scheme`/`network` match `/supported`,
+     confirms the claims reference the advertised tab, user, asset, `payTo`, and that `amount`
+     exactly equals `maxAmountRequired`.
    - Facilitator → Recipient: `{ isValid, invalidReason?, certificate: null }`. No request touches
      4mica core here; this is purely structural validation so recipients can pre-flight calls.
 6. **Recipient settles the tab**
    - Recipient → Facilitator: `POST /settle` with the same payload.
-   - Facilitator: revalidates the header, then
+   - Facilitator: revalidates the payload, then
      - sends `POST core/guarantees` with `{ claims, signature, scheme }` where `claims` contains the
        tab id, user, recipient, asset, amount, and timestamp (plus a version field injected by the
        facilitator),
@@ -307,8 +307,8 @@ Payers sign guarantees instead of EIP-3009 transfers. Use the official SDK `rust
        .await?;
    ```
 
-5. **Build the `X-PAYMENT` header** – wrap `{ x402Version: 1, scheme: "4mica-credit", network:
-"polygon-amoy", payload: { claims, signature, scheme: "eip712" } }` into base64 (see
+5. **Build the payment payload** – construct `{ x402Version: 1, scheme: "4mica-credit", network:
+"polygon-amoy", payload: { claims, signature, scheme: "eip712" } }` (see
 `examples/rust_client/main.rs` or `examples/python_client/client.py`) and send it alongside the retrying
    HTTP request.
 6. **Settle your tabs** – every tab response includes `ttlSeconds`, which is the settlement window in
@@ -407,10 +407,10 @@ keeping custody, settlement, and tab management under your own infrastructure.
 - **Tab provisioning (`POST /tabs`)** – recipients can ask the facilitator to open a payment tab on
   their behalf. The facilitator relays the request to `core/tabs`, converts the 4mica
   response into a plain JSON payload, and hands the tab metadata back to the resource server.
-- **Verification (`POST /verify`)** – recipients send the base64 `X-PAYMENT` header plus the
-  `paymentRequirements` they issued to the client. The facilitator decodes the header, validates the
-  claims against the requirements, and mirrors the upstream x402 error semantics. No 4mica network
-  call is made in this path.
+- **Verification (`POST /verify`)** – recipients send the `paymentPayload` plus the
+  `paymentRequirements` they issued to the client. The facilitator validates the claims against the
+  requirements and mirrors the upstream x402 error semantics. No 4mica network call is made in this
+  path.
 - **Settlement (`POST /settle`)** – recipients replay the same payload once they are ready to accept
   credit. The facilitator re-runs validation, submits the signed guarantee to
   `core/guarantees`, receives the BLS certificate, verifies it against the cached operator public

@@ -6,77 +6,30 @@ use std::{
 
 use async_trait::async_trait;
 use axum::http::StatusCode;
-use base64::{Engine, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use reqwest::{Client, Url};
 use rpc::{
     PaymentGuaranteeClaims, PaymentGuaranteeRequest, PaymentGuaranteeRequestClaims,
     PaymentGuaranteeRequestClaimsV1,
 };
-use rust_sdk_4mica::{Address, BLSCert, U256};
+use rust_sdk_4mica::{Address, U256};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use thiserror::Error;
 use tracing::error;
 
-use crate::issuer::{GuaranteeIssuer, parse_error_message};
+use crate::server::model::{
+    CoreCreateTabRequest, CoreCreateTabResponse, CreateTabRequest, CreateTabResponse,
+    PaymentRequirements, SettleRequest, SettleResponse, SupportedKind, VerifyRequest,
+    VerifyResponse, X402PaymentPayload,
+};
 use crate::verifier::CertificateValidator;
+use crate::{
+    exact::ExactService,
+    issuer::{GuaranteeIssuer, parse_error_message},
+};
 
-const SUPPORTED_VERSION: u8 = 1;
+const SUPPORTED_VERSIONS: [u8; 2] = [1, 2];
 
 pub(super) type SharedState = Arc<AppState>;
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct X402PaymentEnvelopeCompat {
-    x402_version: u64,
-    scheme: String,
-    network: String,
-    payload: PaymentGuaranteeRequestCompat,
-}
-
-#[derive(Debug, Deserialize)]
-struct PaymentGuaranteeRequestCompat {
-    claims: PaymentGuaranteeRequestClaimsCompat,
-    signature: String,
-    scheme: rpc::SigningScheme,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "snake_case", tag = "version")]
-enum PaymentGuaranteeRequestClaimsCompat {
-    V1(PaymentGuaranteeRequestClaimsV1Compat),
-}
-
-#[derive(Debug, Deserialize)]
-struct PaymentGuaranteeRequestClaimsV1Compat {
-    user_address: String,
-    recipient_address: String,
-    tab_id: U256,
-    #[serde(alias = "reqId")]
-    req_id: U256,
-    amount: U256,
-    asset_address: String,
-    timestamp: u64,
-}
-
-impl PaymentGuaranteeRequestCompat {
-    fn into_request(self) -> PaymentGuaranteeRequest {
-        let claims = match self.claims {
-            PaymentGuaranteeRequestClaimsCompat::V1(claims) => {
-                PaymentGuaranteeRequestClaims::V1(PaymentGuaranteeRequestClaimsV1 {
-                    user_address: claims.user_address,
-                    recipient_address: claims.recipient_address,
-                    tab_id: claims.tab_id,
-                    req_id: claims.req_id,
-                    amount: claims.amount,
-                    asset_address: claims.asset_address,
-                    timestamp: claims.timestamp,
-                })
-            }
-        };
-        PaymentGuaranteeRequest::new(claims, self.signature, self.scheme)
-    }
-}
 
 pub(crate) struct AppState {
     four_mica: Vec<FourMicaHandler>,
@@ -105,7 +58,7 @@ impl AppState {
     }
 
     pub fn validate_version(&self, version: u8) -> Result<(), ValidationError> {
-        if version != SUPPORTED_VERSION {
+        if !SUPPORTED_VERSIONS.contains(&version) {
             return Err(ValidationError::UnsupportedVersion(version));
         }
         Ok(())
@@ -118,11 +71,12 @@ impl AppState {
     }
 
     pub async fn supported(&self) -> Vec<SupportedKind> {
-        let mut kinds = self
-            .four_mica
-            .iter()
-            .map(FourMicaHandler::supported_kind)
-            .collect::<Vec<_>>();
+        let mut kinds = Vec::new();
+        for handler in &self.four_mica {
+            for version in SUPPORTED_VERSIONS {
+                kinds.push(handler.supported_kind(version));
+            }
+        }
         if let Some(exact) = &self.exact {
             match exact.supported().await {
                 Ok(list) => kinds.extend(list),
@@ -132,14 +86,16 @@ impl AppState {
         kinds
     }
 
-    pub async fn verify(&self, request: &VerifyRequest) -> Result<VerifyResponse, ValidationError> {
+    pub async fn verify(
+        &self,
+        request: &VerifyRequest,
+        x402_version: u8,
+    ) -> Result<VerifyResponse, ValidationError> {
         let scheme = &request.payment_requirements.scheme;
         let network = &request.payment_requirements.network;
 
         if let Some(handler) = self.handler_for(scheme, network) {
-            return handler
-                .verify(&request.payment_header, &request.payment_requirements)
-                .await;
+            return handler.verify(request, x402_version).await;
         }
 
         if let Some(exact) = &self.exact {
@@ -171,14 +127,16 @@ impl AppState {
         Err(ValidationError::UnsupportedScheme(scheme.clone()))
     }
 
-    pub async fn settle(&self, request: &SettleRequest) -> Result<SettleResponse, ValidationError> {
+    pub async fn settle(
+        &self,
+        request: &SettleRequest,
+        x402_version: u8,
+    ) -> Result<SettleResponse, ValidationError> {
         let scheme = &request.payment_requirements.scheme;
         let network = &request.payment_requirements.network;
 
         if let Some(handler) = self.handler_for(scheme, network) {
-            return handler
-                .settle(&request.payment_header, &request.payment_requirements)
-                .await;
+            return handler.settle(request, x402_version).await;
         }
 
         if let Some(exact) = &self.exact {
@@ -251,21 +209,25 @@ impl FourMicaHandler {
         self.scheme == scheme && self.network == network
     }
 
-    fn supported_kind(&self) -> SupportedKind {
+    fn supported_kind(&self, version: u8) -> SupportedKind {
         SupportedKind {
             scheme: self.scheme.clone(),
             network: self.network.clone(),
-            x402_version: Some(SUPPORTED_VERSION),
+            x402_version: Some(version),
             extra: None,
         }
     }
 
     async fn verify(
         &self,
-        header_b64: &str,
-        reqs: &PaymentRequirements,
+        request: &VerifyRequest,
+        x402_version: u8,
     ) -> Result<VerifyResponse, ValidationError> {
-        self.decode_and_validate_payment_payload(header_b64, reqs)?;
+        let payload = self.decode_payment_payload(
+            request.payment_payload.clone(),
+            &request.payment_requirements,
+        )?;
+        self.validate_payment_payload(&payload, &request.payment_requirements, x402_version)?;
 
         Ok(VerifyResponse {
             is_valid: true,
@@ -276,10 +238,14 @@ impl FourMicaHandler {
 
     async fn settle(
         &self,
-        header_b64: &str,
-        reqs: &PaymentRequirements,
+        request: &SettleRequest,
+        x402_version: u8,
     ) -> Result<SettleResponse, ValidationError> {
-        let payload = self.decode_and_validate_payment_payload(header_b64, reqs)?;
+        let payload = self.decode_payment_payload(
+            request.payment_payload.clone(),
+            &request.payment_requirements,
+        )?;
+        self.validate_payment_payload(&payload, &request.payment_requirements, x402_version)?;
 
         let certificate = self
             .issuer
@@ -311,58 +277,67 @@ impl FourMicaHandler {
         ))
     }
 
-    fn decode_header_into_payment_payload(
+    fn decode_payment_payload(
         &self,
-        header_b64: &str,
+        payload: X402PaymentPayload,
         reqs: &PaymentRequirements,
     ) -> Result<PaymentGuaranteeRequest, ValidationError> {
-        let envelope: X402PaymentEnvelopeCompat = {
-            let decoded = BASE64_STANDARD.decode(header_b64.trim()).map_err(|err| {
-                ValidationError::InvalidHeader(format!(
-                    "failed to base64 decode payment header: {err}"
-                ))
-            })?;
-            serde_json::from_slice(&decoded).map_err(|err| {
-                ValidationError::InvalidHeader(format!(
-                    "failed to deserialize payment header: {err}"
-                ))
-            })?
-        };
+        match payload {
+            X402PaymentPayload::V1(envelope) => {
+                if envelope.scheme != self.scheme {
+                    return Err(ValidationError::UnsupportedScheme(envelope.scheme));
+                }
+                if reqs.scheme != self.scheme {
+                    return Err(ValidationError::UnsupportedScheme(reqs.scheme.clone()));
+                }
+                if envelope.network != self.network {
+                    return Err(ValidationError::UnsupportedNetwork(envelope.network));
+                }
+                if reqs.network != self.network {
+                    return Err(ValidationError::UnsupportedNetwork(reqs.network.clone()));
+                }
 
-        if envelope.scheme != self.scheme {
-            return Err(ValidationError::UnsupportedScheme(envelope.scheme));
-        }
-        if reqs.scheme != self.scheme {
-            return Err(ValidationError::UnsupportedScheme(reqs.scheme.clone()));
-        }
-        if envelope.network != self.network {
-            return Err(ValidationError::UnsupportedNetwork(envelope.network));
-        }
-        if reqs.network != self.network {
-            return Err(ValidationError::UnsupportedNetwork(reqs.network.clone()));
-        }
-        if envelope.x402_version as u8 != SUPPORTED_VERSION {
-            return Err(ValidationError::UnsupportedVersion(
-                envelope.x402_version as u8,
-            ));
-        }
+                let signature = envelope.payload.signature.trim();
+                if signature.is_empty() {
+                    return Err(ValidationError::InvalidHeader(
+                        "signature cannot be empty".into(),
+                    ));
+                }
 
-        let signature = envelope.payload.signature.trim();
-        if signature.is_empty() {
-            return Err(ValidationError::InvalidHeader(
-                "signature cannot be empty".into(),
-            ));
-        }
+                Ok(envelope.payload.into_request())
+            }
+            X402PaymentPayload::V2(envelope) => {
+                if envelope.accepted.scheme != self.scheme {
+                    return Err(ValidationError::UnsupportedScheme(envelope.accepted.scheme));
+                }
+                if reqs.scheme != self.scheme {
+                    return Err(ValidationError::UnsupportedScheme(reqs.scheme.clone()));
+                }
+                if envelope.accepted.network != self.network {
+                    return Err(ValidationError::UnsupportedNetwork(
+                        envelope.accepted.network,
+                    ));
+                }
+                if reqs.network != self.network {
+                    return Err(ValidationError::UnsupportedNetwork(reqs.network.clone()));
+                }
+                if envelope.payload.signature.trim().is_empty() {
+                    return Err(ValidationError::InvalidHeader(
+                        "signature cannot be empty".into(),
+                    ));
+                }
 
-        Ok(envelope.payload.into_request())
+                Ok(envelope.payload.into_request())
+            }
+        }
     }
 
-    fn decode_and_validate_payment_payload(
+    fn validate_payment_payload(
         &self,
-        header_b64: &str,
+        payload: &PaymentGuaranteeRequest,
         reqs: &PaymentRequirements,
-    ) -> Result<PaymentGuaranteeRequest, ValidationError> {
-        let payload = self.decode_header_into_payment_payload(header_b64, reqs)?;
+        version: u8,
+    ) -> Result<(), ValidationError> {
         match &payload.claims {
             PaymentGuaranteeRequestClaims::V1(claims) => {
                 tracing::debug!(
@@ -371,17 +346,17 @@ impl FourMicaHandler {
                     amount = format!("{:#x}", claims.amount),
                     "Decoded 4mica claims"
                 );
-                self.ensure_claims_v1_match_requirements(claims, reqs)?;
+                self.ensure_claims_v1_match_requirements(claims, reqs, version)?;
             }
         }
-
-        Ok(payload)
+        Ok(())
     }
 
     fn ensure_claims_v1_match_requirements(
         &self,
         claims: &PaymentGuaranteeRequestClaimsV1,
         reqs: &PaymentRequirements,
+        version: u8,
     ) -> Result<(), ValidationError> {
         let required_pay_to = Address::from_str(&reqs.pay_to)
             .map_err(|_| ValidationError::InvalidRequirements("invalid payTo address".into()))?;
@@ -409,17 +384,21 @@ impl FourMicaHandler {
             )));
         }
 
-        let amount_required =
-            parse_u256(&reqs.max_amount_required).map_err(ValidationError::InvalidRequirements)?;
+        let amount_required = required_amount(reqs, version)?;
         if claims.amount.is_zero() {
             return Err(ValidationError::InvalidClaims(
                 "claim amount is zero".into(),
             ));
         }
         if claims.amount != amount_required {
+            let amount_label = if version == 2 {
+                "amount"
+            } else {
+                "maxAmountRequired"
+            };
             return Err(ValidationError::Mismatch(format!(
-                "claim amount {} does not match maxAmountRequired {}",
-                claims.amount, amount_required
+                "claim amount {} does not match {} {}",
+                claims.amount, amount_label, amount_required
             )));
         }
 
@@ -578,184 +557,49 @@ fn current_timestamp() -> i64 {
         .unwrap_or_default()
 }
 
-#[async_trait]
-pub(crate) trait ExactService: Send + Sync {
-    async fn verify(&self, request: &VerifyRequest) -> Result<VerifyResponse, ValidationError>;
-    async fn settle(&self, request: &SettleRequest) -> Result<SettleResponse, ValidationError>;
-    async fn supported(&self) -> Result<Vec<SupportedKind>, ValidationError>;
-}
+pub fn resolve_x402_version(
+    payment_payload: &X402PaymentPayload,
+    request_version: Option<u8>,
+) -> Result<u8, ValidationError> {
+    let payload_version = payment_payload.x402_version();
 
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SupportedKind {
-    pub scheme: String,
-    pub network: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub x402_version: Option<u8>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub extra: Option<Value>,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SupportedResponse {
-    pub kinds: Vec<SupportedKind>,
-}
-
-impl SupportedResponse {
-    pub fn new(kinds: Vec<SupportedKind>) -> Self {
-        Self { kinds }
-    }
-}
-
-#[derive(Serialize)]
-pub struct HealthResponse<'a> {
-    pub status: &'a str,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PaymentRequirements {
-    pub scheme: String,
-    pub network: String,
-    pub max_amount_required: String,
-    pub resource: Option<String>,
-    pub description: Option<String>,
-    pub mime_type: Option<String>,
-    pub output_schema: Option<Value>,
-    pub pay_to: String,
-    pub max_timeout_seconds: Option<u64>,
-    pub asset: String,
-    pub extra: Option<Value>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct CreateTabRequest {
-    #[serde(alias = "userAddress")]
-    pub user_address: String,
-    #[serde(alias = "recipientAddress")]
-    pub recipient_address: String,
-    #[serde(alias = "erc20Token", alias = "assetAddress")]
-    #[serde(default)]
-    pub erc20_token: Option<String>,
-    #[serde(alias = "ttlSeconds")]
-    #[serde(default)]
-    pub ttl_seconds: Option<u64>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CreateTabResponse {
-    pub tab_id: String,
-    pub user_address: String,
-    pub recipient_address: String,
-    pub asset_address: String,
-    pub start_timestamp: i64,
-    pub ttl_seconds: i64,
-    pub next_req_id: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct VerifyRequest {
-    #[serde(rename = "x402Version")]
-    pub x402_version: u8,
-    #[serde(rename = "paymentHeader")]
-    pub payment_header: String,
-    #[serde(rename = "paymentRequirements")]
-    pub payment_requirements: PaymentRequirements,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct SettleRequest {
-    #[serde(rename = "x402Version")]
-    pub x402_version: u8,
-    #[serde(rename = "paymentHeader")]
-    pub payment_header: String,
-    #[serde(rename = "paymentRequirements")]
-    pub payment_requirements: PaymentRequirements,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct VerifyResponse {
-    pub is_valid: bool,
-    pub invalid_reason: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub certificate: Option<CertificateResponse>,
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct CertificateResponse {
-    pub claims: String,
-    pub signature: String,
-}
-
-impl From<BLSCert> for CertificateResponse {
-    fn from(cert: BLSCert) -> Self {
-        Self {
-            claims: cert.claims,
-            signature: cert.signature,
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SettleResponse {
-    pub success: bool,
-    pub error: Option<String>,
-    pub tx_hash: Option<String>,
-    pub network_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub certificate: Option<CertificateResponse>,
-}
-
-impl SettleResponse {
-    pub fn invalid(reason: String, network: &str) -> Self {
-        Self {
-            success: false,
-            error: Some(reason),
-            tx_hash: None,
-            network_id: Some(network.to_string()),
-            certificate: None,
-        }
+    if let Some(request_version) = request_version
+        && request_version != payload_version
+    {
+        return Err(ValidationError::InvalidHeader(format!(
+            "x402Version {} does not match paymentPayload x402Version {}",
+            request_version, payload_version
+        )));
     }
 
-    pub fn from_exact(
-        success: bool,
-        error: Option<String>,
-        tx_hash: Option<String>,
-        network: String,
-    ) -> Self {
-        Self {
-            success,
-            error,
-            tx_hash,
-            network_id: Some(network),
-            certificate: None,
-        }
-    }
-
-    pub fn four_mica_success(network: &str, certificate: CertificateResponse) -> Self {
-        Self {
-            success: true,
-            error: None,
-            tx_hash: None,
-            network_id: Some(network.to_string()),
-            certificate: Some(certificate),
-        }
-    }
+    Ok(payload_version)
 }
 
-fn parse_u256(value: &str) -> Result<U256, String> {
+fn parse_u256_field(value: &str, field: &str) -> Result<U256, String> {
     if value.is_empty() {
-        return Err("maxAmountRequired cannot be empty".into());
+        return Err(format!("{field} cannot be empty"));
     }
     if let Some(rest) = value.strip_prefix("0x") {
         U256::from_str_radix(rest, 16).map_err(|err| format!("invalid hex amount: {err}"))
     } else {
         U256::from_str_radix(value, 10).map_err(|err| format!("invalid decimal amount: {err}"))
+    }
+}
+
+fn parse_u256(value: &str) -> Result<U256, String> {
+    parse_u256_field(value, "maxAmountRequired")
+}
+
+fn required_amount(reqs: &PaymentRequirements, version: u8) -> Result<U256, ValidationError> {
+    match version {
+        1 => parse_u256(&reqs.max_amount_required).map_err(ValidationError::InvalidRequirements),
+        2 => {
+            let amount = reqs.amount.as_deref().ok_or_else(|| {
+                ValidationError::InvalidRequirements("amount is required for x402Version 2".into())
+            })?;
+            parse_u256_field(amount, "amount").map_err(ValidationError::InvalidRequirements)
+        }
+        _ => Err(ValidationError::UnsupportedVersion(version)),
     }
 }
 
@@ -781,6 +625,9 @@ pub enum ValidationError {
     UnsupportedVersion(u8),
     #[error("exact flow error: {0}")]
     Exact(String),
+
+    #[error(transparent)]
+    Other(anyhow::Error),
 }
 
 #[derive(Debug, Error)]
@@ -791,25 +638,4 @@ pub enum TabError {
     Invalid(String),
     #[error("{message}")]
     Upstream { status: StatusCode, message: String },
-}
-
-#[derive(Debug, Serialize)]
-struct CoreCreateTabRequest {
-    user_address: String,
-    recipient_address: String,
-    erc20_token: Option<String>,
-    ttl: Option<u64>,
-}
-
-#[derive(Debug, Deserialize)]
-struct CoreCreateTabResponse {
-    id: U256,
-    #[serde(default)]
-    #[serde(alias = "asset_address", alias = "assetAddress")]
-    asset_address: Option<String>,
-    #[serde(default)]
-    erc20_token: Option<String>,
-    #[serde(default)]
-    #[serde(alias = "nextReqId", alias = "reqId")]
-    next_req_id: Option<U256>,
 }
