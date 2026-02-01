@@ -164,7 +164,7 @@ pub fn normalize_network_id(raw: &str) -> String {
 
     match trimmed.to_ascii_lowercase().as_str() {
         "polygon-amoy" => "eip155:80002".to_string(),
-        "sepolia-mainnet" | "sepolia" => "eip155:11155111".to_string(),
+        "ethereum-sepolia" | "sepolia" => "eip155:11155111".to_string(),
         "base" => "eip155:8453".to_string(),
         "base-sepolia" => "eip155:84532".to_string(),
         _ => trimmed.to_string(),
