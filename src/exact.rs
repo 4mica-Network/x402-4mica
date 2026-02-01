@@ -1,9 +1,8 @@
-use std::{collections::HashSet, sync::Arc};
+use std::sync::Arc;
 
-use anyhow::{Context, bail};
+use anyhow::Context;
 use async_trait::async_trait;
 use reqwest::{Client, Url};
-use serde::Deserialize;
 use tracing::{info, warn};
 use x402_rs::chain::ChainRegistry;
 use x402_rs::config::Config as X402Config;
@@ -19,7 +18,6 @@ use crate::server::model::{
 use crate::server::state::ValidationError;
 
 const ENV_DEBIT_URL: &str = "X402_DEBIT_URL";
-const ENV_DEBIT_URLS: &str = "X402_DEBIT_URLS";
 const ENV_CONFIG_PATH: &str = "X402_CONFIG_PATH";
 
 fn convert_supported_kind(kind: SupportedPaymentKind) -> Result<SupportedKind, ValidationError> {
@@ -120,14 +118,6 @@ fn convert_settle_request(
 }
 
 pub async fn try_from_env() -> anyhow::Result<Option<Arc<dyn ExactService>>> {
-    if let Some(remote) = MultiHttpExactService::from_env()? {
-        info!(
-            count = remote.services.len(),
-            "using multiple remote debit facilitators"
-        );
-        return Ok(Some(Arc::new(remote)));
-    }
-
     if let Some(remote) = HttpExactService::from_env()? {
         info!(url = %remote.base_url, "using remote debit facilitator");
         return Ok(Some(Arc::new(remote)));
@@ -257,8 +247,16 @@ struct HttpExactService {
 }
 
 impl HttpExactService {
-    fn new(base_url: Url) -> anyhow::Result<Self> {
-        Ok(Self {
+    fn from_env() -> anyhow::Result<Option<Self>> {
+        let Some((raw, source)) = Self::debit_url_from_env() else {
+            return Ok(None);
+        };
+
+        let base_url = Url::parse(&raw)
+            .or_else(|_| Url::parse(&format!("{raw}/")))
+            .with_context(|| format!("failed to parse {source}"))?;
+
+        Ok(Some(Self {
             client: reqwest::Client::builder()
                 .no_proxy()
                 .user_agent(format!("x402-4mica/{}", env!("CARGO_PKG_VERSION")))
@@ -270,22 +268,7 @@ impl HttpExactService {
                 .build()
                 .context("failed to build reqwest client")?,
             base_url,
-        })
-    }
-
-    fn from_env() -> anyhow::Result<Option<Self>> {
-        let Some((raw, source)) = Self::debit_url_from_env() else {
-            return Ok(None);
-        };
-
-        Self::from_raw(&raw, source).map(Some)
-    }
-
-    fn from_raw(raw: &str, source: &str) -> anyhow::Result<Self> {
-        let base_url = Url::parse(raw)
-            .or_else(|_| Url::parse(&format!("{raw}/")))
-            .with_context(|| format!("failed to parse {source}"))?;
-        Self::new(base_url)
+        }))
     }
 
     fn debit_url_from_env() -> Option<(String, &'static str)> {
@@ -353,131 +336,6 @@ impl HttpExactService {
     }
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct DebitUrlConfig {
-    network: String,
-    #[serde(alias = "url", alias = "baseUrl")]
-    debit_url: String,
-}
-
-struct NetworkedExactService {
-    network: String,
-    service: HttpExactService,
-}
-
-struct MultiHttpExactService {
-    services: Vec<NetworkedExactService>,
-}
-
-impl MultiHttpExactService {
-    fn from_env() -> anyhow::Result<Option<Self>> {
-        let Some(entries) = parse_debit_urls_from_env()? else {
-            return Ok(None);
-        };
-        let mut services = Vec::with_capacity(entries.len());
-        for entry in entries {
-            let service = HttpExactService::from_raw(&entry.debit_url, ENV_DEBIT_URLS)?;
-            services.push(NetworkedExactService {
-                network: entry.network,
-                service,
-            });
-        }
-        Ok(Some(Self { services }))
-    }
-
-    fn select_service(&self, network: &str) -> Option<&HttpExactService> {
-        let mut wildcard: Option<&HttpExactService> = None;
-        for entry in &self.services {
-            if entry.network == network {
-                return Some(&entry.service);
-            }
-            if wildcard.is_none() && matches_network_pattern(network, &entry.network) {
-                wildcard = Some(&entry.service);
-            }
-        }
-        wildcard
-    }
-}
-
-#[async_trait]
-impl ExactService for MultiHttpExactService {
-    async fn verify(&self, request: &VerifyRequest) -> Result<VerifyResponse, ValidationError> {
-        let network = crate::config::normalize_network_id(&request.payment_requirements.network);
-        let service = self
-            .select_service(&network)
-            .ok_or_else(|| ValidationError::UnsupportedNetwork(network))?;
-        service.verify(request).await
-    }
-
-    async fn settle(&self, request: &SettleRequest) -> Result<SettleResponse, ValidationError> {
-        let network = crate::config::normalize_network_id(&request.payment_requirements.network);
-        let service = self
-            .select_service(&network)
-            .ok_or_else(|| ValidationError::UnsupportedNetwork(network))?;
-        service.settle(request).await
-    }
-
-    async fn supported(&self) -> Result<Vec<SupportedKind>, ValidationError> {
-        let mut kinds = Vec::new();
-        let mut seen: HashSet<(String, String, Option<u8>)> = HashSet::new();
-        for entry in &self.services {
-            let response = entry.service.supported().await?;
-            for kind in response {
-                let key = (kind.scheme.clone(), kind.network.clone(), kind.x402_version);
-                if seen.insert(key) {
-                    kinds.push(kind);
-                }
-            }
-        }
-        Ok(kinds)
-    }
-}
-
-fn parse_debit_urls_from_env() -> anyhow::Result<Option<Vec<DebitUrlConfig>>> {
-    let raw = std::env::var(ENV_DEBIT_URLS)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
-    let Some(raw) = raw else {
-        return Ok(None);
-    };
-
-    let mut entries: Vec<DebitUrlConfig> = serde_json::from_str(&raw).with_context(|| {
-        format!(
-            "{ENV_DEBIT_URLS} must be JSON like \
-        '[{{\"network\":\"eip155:8453\",\"debitUrl\":\"https://x402.example.com\"}}]'"
-        )
-    })?;
-    if entries.is_empty() {
-        bail!("{ENV_DEBIT_URLS} must include at least one entry");
-    }
-
-    for entry in &mut entries {
-        entry.network = crate::config::normalize_network_id(&entry.network);
-        if entry.network.trim().is_empty() {
-            bail!("{ENV_DEBIT_URLS} entries require a non-empty network");
-        }
-        entry.debit_url = entry.debit_url.trim().to_string();
-        if entry.debit_url.is_empty() {
-            bail!("{ENV_DEBIT_URLS} entries require a non-empty debitUrl");
-        }
-    }
-
-    Ok(Some(entries))
-}
-
-fn matches_network_pattern(network: &str, pattern: &str) -> bool {
-    let pattern = pattern.trim();
-    if pattern == "*" {
-        return true;
-    }
-    if let Some(prefix) = pattern.strip_suffix('*') {
-        return network.starts_with(prefix);
-    }
-    network == pattern
-}
-
 #[async_trait]
 impl ExactService for HttpExactService {
     async fn verify(&self, request: &VerifyRequest) -> Result<VerifyResponse, ValidationError> {
@@ -541,14 +399,6 @@ mod tests {
         unsafe { env::remove_var(ENV_DEBIT_URL) };
     }
 
-    fn set_debit_urls(value: &str) {
-        unsafe { env::set_var(ENV_DEBIT_URLS, value) };
-    }
-
-    fn clear_debit_urls() {
-        unsafe { env::remove_var(ENV_DEBIT_URLS) };
-    }
-
     #[test]
     #[serial]
     fn parses_debit_url_from_env() {
@@ -559,19 +409,5 @@ mod tests {
         let url = service.url("verify").expect("url");
         assert_eq!(url.as_str(), "http://example.com/verify");
         clear_debit_url();
-    }
-
-    #[test]
-    #[serial]
-    fn parses_debit_urls_from_env() {
-        set_debit_urls(r#"[{"network":"eip155:8453","debitUrl":"http://example.com"}]"#);
-        let service = MultiHttpExactService::from_env()
-            .expect("from_env")
-            .expect("present");
-        assert_eq!(service.services.len(), 1);
-        assert_eq!(service.services[0].network, "eip155:8453");
-        let url = service.services[0].service.url("verify").expect("url");
-        assert_eq!(url.as_str(), "http://example.com/verify");
-        clear_debit_urls();
     }
 }

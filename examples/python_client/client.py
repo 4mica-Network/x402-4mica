@@ -64,21 +64,12 @@ async def main() -> None:
     client = await Client.new(cfg)
 
     usdc_amount = 1 * USDC_BASE_UNITS
-    try:
-        proceed = input(
-            f"Approve + deposit 1 USDC ({usdc_amount} base units)? [y/N] "
-        ).strip()
-    except EOFError:
-        proceed = ""
-    if proceed.lower() in {"y", "yes"}:
-        print(f"Approving 1 USDC ({usdc_amount} base units) for deposit...")
-        approve_receipt = await client.user.approve_erc20(asset_address, usdc_amount)
-        print(f"Approval tx hash: {_format_tx_hash(approve_receipt)}")
-        print("Depositing 1 USDC collateral...")
-        deposit_receipt = await client.user.deposit(usdc_amount, asset_address)
-        print(f"Deposit tx hash: {_format_tx_hash(deposit_receipt)}")
-    else:
-        print("Skipping approval + deposit.")
+    print(f"Approving 1 USDC ({usdc_amount} base units) for deposit...")
+    approve_receipt = await client.user.approve_erc20(asset_address, usdc_amount)
+    print(f"Approval tx hash: {_format_tx_hash(approve_receipt)}")
+    print("Depositing 1 USDC collateral...")
+    deposit_receipt = await client.user.deposit(usdc_amount, asset_address)
+    print(f"Deposit tx hash: {_format_tx_hash(deposit_receipt)}")
 
     flow = X402Flow.from_client(client)
 

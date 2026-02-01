@@ -40,7 +40,7 @@ JsonDict = Dict[str, Any]
 
 ENV_PATH = Path(__file__).parent.with_name(".env")
 DEFAULT_SCHEME = "4mica-credit"
-DEFAULT_NETWORK = "eip155:80002"
+DEFAULT_NETWORK = "polygon-amoy"
 DEFAULT_MAX_AMOUNT = "100"  
 DEFAULT_ASSET = "0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582"
 DEFAULT_DESCRIPTION = "Demo paid API - 4mica tab verification required"
@@ -165,12 +165,6 @@ def _ensure_payment_tab(
     existing = _TAB_STATE.get(user_address)
     now = int(time.time())
     if existing is not None:
-        logger.info(
-            "reusing cached tab user=%s tab_id=%s next_req_id=%s",
-            user_address,
-            existing.get("tab_id"),
-            existing.get("next_req_id"),
-        )
         stored_ttl = existing.get("ttl_seconds")
         start_ts = existing.get("start_timestamp", now)
         if stored_ttl and stored_ttl > 0 and (start_ts + stored_ttl) <= now:
@@ -193,12 +187,6 @@ def _ensure_payment_tab(
         "erc20_token": erc20_token or asset_address,
         "ttl_seconds": ttl_seconds,
     }
-    logger.info(
-        "requesting tab from facilitator user=%s recipient=%s asset=%s",
-        user_address,
-        recipient_address,
-        asset_address,
-    )
 
     try:
         response = requests.post(url, json=payload, timeout=10)
@@ -212,12 +200,6 @@ def _ensure_payment_tab(
         raise RuntimeError(f"Failed to request payment tab via facilitator at {url}: {err}") from err
 
     data = response.json()
-    logger.info(
-        "facilitator /tabs response user=%s tab_id=%s next_req_id=%s",
-        user_address,
-        data.get("tabId"),
-        data.get("nextReqId") or data.get("next_req_id") or data.get("reqId"),
-    )
     tab_id = data.get("tabId")
     if tab_id is None:
         raise RuntimeError("Facilitator response missing tabId.")
@@ -382,7 +364,7 @@ def _maybe_normalize_address(value: Any, *, field: str) -> Optional[str]:
         return None
 
 
-def _payment_payload_from_header(header: str) -> Optional[JsonDict]:
+def _user_address_from_header(header: str) -> Optional[str]:
     trimmed = header.strip()
     if not trimmed:
         return None
@@ -391,15 +373,7 @@ def _payment_payload_from_header(header: str) -> Optional[JsonDict]:
         payload = json.loads(decoded)
     except (ValueError, binascii.Error):
         return None
-    if not isinstance(payload, dict):
-        return None
-    return payload
 
-
-def _user_address_from_header(header: str) -> Optional[str]:
-    payload = _payment_payload_from_header(header)
-    if payload is None:
-        return None
     claims_payload = payload.get("payload")
     if not isinstance(claims_payload, dict):
         return None
@@ -409,51 +383,6 @@ def _user_address_from_header(header: str) -> Optional[str]:
     return _maybe_normalize_address(claims.get("user_address"), field="claims.user_address")
 
 
-def _claims_from_header(header: str) -> Optional[JsonDict]:
-    payload = _payment_payload_from_header(header)
-    if payload is None:
-        return None
-    claims_payload = payload.get("payload")
-    if not isinstance(claims_payload, dict):
-        return None
-    claims = claims_payload.get("claims")
-    if not isinstance(claims, dict):
-        return None
-    return claims
-
-
-def _parse_u256(value: Any) -> Optional[int]:
-    if value is None:
-        return None
-    if isinstance(value, int):
-        return value
-    if isinstance(value, str):
-        trimmed = value.strip()
-        if not trimmed:
-            return None
-        try:
-            return int(trimmed, 0)
-        except ValueError:
-            return None
-    return None
-
-
-def _bump_next_req_id(user_address: str, req_id_value: Any) -> None:
-    parsed = _parse_u256(req_id_value)
-    if parsed is None:
-        return
-    entry = _TAB_STATE.get(user_address)
-    if entry is None:
-        return
-    entry["next_req_id"] = hex(parsed + 1)
-    _TAB_STATE[user_address] = entry
-    logger.info(
-        "updated tab next_req_id user=%s next_req_id=%s",
-        user_address,
-        entry["next_req_id"],
-    )
-
-
 def verify_with_facilitator(
     facilitator_url: str,
     header: str,
@@ -461,13 +390,9 @@ def verify_with_facilitator(
     *,
     user_address: Optional[str] = None,
 ) -> Tuple[bool, Optional[JsonDict], Optional[str]]:
-    payment_payload = _payment_payload_from_header(header)
-    if payment_payload is None:
-        return False, None, "invalid payment payload"
-    x402_version = payment_payload.get("x402Version", 1)
     payload = {
-        "x402Version": x402_version,
-        "paymentPayload": payment_payload,
+        "x402Version": 1,
+        "paymentHeader": header,
         "paymentRequirements": json.loads(json.dumps(requirements)),
     }
     endpoint = f"{facilitator_url.rstrip('/')}/verify"
@@ -487,12 +412,6 @@ def verify_with_facilitator(
         )
         return False, None, f"failed to contact facilitator at {endpoint}: {err}"
     data = response.json()
-    logger.info(
-        "facilitator verify response tab=%s user=%s status=%s",
-        tab_id,
-        user_address or "unknown",
-        response.status_code,
-    )
     if data.get("isValid") is True:
         logger.info("facilitator verify success tab=%s user=%s", tab_id, user_address or "unknown")
         return True, data, None
@@ -514,13 +433,9 @@ def settle_with_facilitator(
     *,
     user_address: Optional[str] = None,
 ) -> Tuple[bool, Optional[JsonDict], Optional[str]]:
-    payment_payload = _payment_payload_from_header(header)
-    if payment_payload is None:
-        return False, None, "invalid payment payload"
-    x402_version = payment_payload.get("x402Version", 1)
     payload = {
-        "x402Version": x402_version,
-        "paymentPayload": payment_payload,
+        "x402Version": 1,
+        "paymentHeader": header,
         "paymentRequirements": json.loads(json.dumps(requirements)),
     }
     endpoint = f"{facilitator_url.rstrip('/')}/settle"
@@ -541,12 +456,6 @@ def settle_with_facilitator(
         return False, None, f"failed to contact facilitator at {endpoint}: {err}"
 
     data = response.json()
-    logger.info(
-        "facilitator settle response tab=%s user=%s status=%s",
-        tab_id,
-        user_address or "unknown",
-        response.status_code,
-    )
     if data.get("success") is True:
         logger.info(
             "facilitator settle success tab=%s user=%s", tab_id, user_address or "unknown"
@@ -609,7 +518,6 @@ def create_app() -> FastAPI:
         except RuntimeError as err:
             return JSONResponse({"error": str(err)}, status_code=status.HTTP_400_BAD_REQUEST)
 
-        logger.info("received /tab request user=%s", user_address)
         override = _load_custom_requirements()
         if override is not None:
             requirements = _clone_requirements(override)
@@ -627,12 +535,6 @@ def create_app() -> FastAPI:
         if extra.get("nextReqId"):
             response_body["nextReqId"] = extra["nextReqId"]
         response_body["userAddress"] = user_address
-        logger.info(
-            "issued tab user=%s tab_id=%s next_req_id=%s",
-            user_address,
-            response_body.get("tabId"),
-            response_body.get("nextReqId"),
-        )
         return JSONResponse(response_body)
 
     @app.get("/protected")
@@ -673,18 +575,6 @@ def create_app() -> FastAPI:
             }
             return JSONResponse(response_body, status_code=status.HTTP_402_PAYMENT_REQUIRED)
 
-        claims = _claims_from_header(x_payment) or {}
-        logger.info(
-            "X-PAYMENT claims tab_id=%s req_id=%s user=%s",
-            claims.get("tab_id"),
-            claims.get("req_id"),
-            user_address,
-        )
-        logger.info(
-            "active requirements tab_id=%s next_req_id=%s",
-            requirements.get("extra", {}).get("tabId"),
-            requirements.get("extra", {}).get("nextReqId"),
-        )
         logger.info(
             "verifying user guarantee tab=%s user=%s resource=%s",
             requirements.get("extra", {}).get("tabId"),
@@ -749,7 +639,6 @@ def create_app() -> FastAPI:
             if settle_response is not None:
                 body["settle"] = settle_response
             _clear_user_state(user_address)
-            _bump_next_req_id(user_address, claims.get("req_id"))
             logger.info("guarantee settled tab=%s user=%s", tab_id, user_address)
             return JSONResponse(body)
 
