@@ -358,8 +358,16 @@ export ASSET_ADDRESS=0x...
 export X402_GUARANTEE_DOMAIN=0x...
 # legacy: FOUR_MICA_GUARANTEE_DOMAIN / 4MICA_GUARANTEE_DOMAIN
 
-# Optional: proxy x402 debit flows to an existing x402-rs facilitator
+# Optional: proxy x402 debit flows to existing x402-rs facilitators
+# Single upstream:
 export X402_DEBIT_URL=https://x402.example.com/
+# Multi-upstream (takes precedence over X402_DEBIT_URL):
+export X402_DEBIT_URLS='[
+  {"network":"eip155:8453","debitUrl":"https://x402-base.example.com/"},
+  {"network":"eip155:*","debitUrl":"https://x402-evm.example.com/"}
+]'
+# Exact matches are preferred over wildcard patterns; the first wildcard match wins.
+# When set, X402_DEBIT_URLS takes precedence over X402_DEBIT_URL.
 
 # Optional: enable standard x402 settlement for EVM networks
 export SIGNER_TYPE=private-key
