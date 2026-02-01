@@ -130,6 +130,7 @@ async fn create_tab_handler(
         Err(err) => {
             let status = match &err {
                 TabError::Unsupported => StatusCode::NOT_IMPLEMENTED,
+                TabError::UnsupportedNetwork(_) => StatusCode::BAD_REQUEST,
                 TabError::Invalid(_) => StatusCode::BAD_REQUEST,
                 TabError::Upstream { status, .. } => *status,
             };
