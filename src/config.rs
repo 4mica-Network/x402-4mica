@@ -17,7 +17,7 @@ const ENV_GUARANTEE_DOMAIN_VARIANTS: [&str; 3] = [
     "FOUR_MICA_GUARANTEE_DOMAIN",
     "4MICA_GUARANTEE_DOMAIN",
 ];
-const DEFAULT_NETWORK_ID: &str = "sepolia-mainnet";
+const DEFAULT_NETWORK_ID: &str = "eip155:11155111";
 
 #[derive(Clone)]
 pub struct ServiceConfig {
@@ -88,6 +88,7 @@ fn load_networks_from_env() -> Result<Vec<NetworkConfig>> {
     }
 
     let network = std::env::var(ENV_NETWORK).unwrap_or_else(|_| DEFAULT_NETWORK_ID.into());
+    let network = normalize_network_id(&network);
     let api_url = std::env::var(ENV_CORE_API_URL).unwrap_or_else(|_| DEFAULT_CORE_API_URL.into());
     let api_base_url = normalize_url(&api_url)?;
 
@@ -101,7 +102,7 @@ fn parse_network_list(raw: &str) -> Result<Vec<NetworkConfig>> {
     let entries: Vec<NetworkEnvConfig> = serde_json::from_str(raw).with_context(|| {
         format!(
             "{ENV_NETWORKS} must be JSON like \
-        '[{{\"network\":\"sepolia-mainnet\",\"coreApiUrl\":\"https://api.4mica.xyz/\"}}]'"
+        '[{{\"network\":\"eip155:11155111\",\"coreApiUrl\":\"https://api.4mica.xyz/\"}}]'"
         )
     })?;
     if entries.is_empty() {
@@ -114,6 +115,7 @@ fn parse_network_list(raw: &str) -> Result<Vec<NetworkConfig>> {
         if network.is_empty() {
             bail!("{ENV_NETWORKS} entries require a non-empty `network` field");
         }
+        let network = normalize_network_id(network);
         let url = normalize_url(entry.core_api_url.trim())
             .with_context(|| format!("failed to parse coreApiUrl for network {}", entry.network))?;
         configs.push(NetworkConfig {
@@ -152,6 +154,21 @@ fn normalize_url(input: &str) -> Result<Url> {
         url.set_path("/");
     }
     Ok(url)
+}
+
+pub fn normalize_network_id(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    match trimmed.to_ascii_lowercase().as_str() {
+        "polygon-amoy" => "eip155:80002".to_string(),
+        "sepolia-mainnet" | "sepolia" => "eip155:11155111".to_string(),
+        "base" => "eip155:8453".to_string(),
+        "base-sepolia" => "eip155:84532".to_string(),
+        _ => trimmed.to_string(),
+    }
 }
 
 fn optional_asset_address_from_env() -> Option<String> {

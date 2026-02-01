@@ -174,6 +174,9 @@ pub struct PaymentRequirements {
 pub struct CreateTabRequest {
     pub user_address: String,
     pub recipient_address: String,
+    #[serde(default)]
+    #[serde(alias = "networkId", alias = "network_id")]
+    pub network: Option<String>,
     #[serde(alias = "assetAddress")]
     #[serde(default)]
     pub erc20_token: Option<String>,

@@ -5,7 +5,7 @@ mod server;
 mod telemetry;
 mod verifier;
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use anyhow::Context;
 
@@ -57,16 +57,29 @@ async fn main() -> anyhow::Result<()> {
         ));
     }
 
-    let tab_service: Option<Arc<dyn TabService>> = service_cfg.networks.first().map(|network| {
-        Arc::new(CoreTabService::new(
-            network.core_api_base_url.clone(),
-            service_cfg.asset_address.clone(),
-        )) as Arc<dyn TabService>
-    });
+    let mut tab_services: HashMap<String, Arc<dyn TabService>> = HashMap::new();
+    for network in &service_cfg.networks {
+        tab_services.insert(
+            network.id.clone(),
+            Arc::new(CoreTabService::new(
+                network.core_api_base_url.clone(),
+                service_cfg.asset_address.clone(),
+            )) as Arc<dyn TabService>,
+        );
+    }
+    let default_tab_network = service_cfg
+        .networks
+        .first()
+        .map(|network| network.id.clone());
 
     let exact_service: Option<Arc<dyn ExactService>> = build_exact_service().await?;
 
-    let state = AppState::new(four_mica_handlers, tab_service, exact_service);
+    let state = AppState::new(
+        four_mica_handlers,
+        tab_services,
+        default_tab_network,
+        exact_service,
+    );
 
     server::run(service_cfg, state).await
 }
