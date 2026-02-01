@@ -1,5 +1,4 @@
 use std::{
-    collections::HashMap,
     str::FromStr,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
@@ -34,22 +33,19 @@ pub(super) type SharedState = Arc<AppState>;
 
 pub(crate) struct AppState {
     four_mica: Vec<FourMicaHandler>,
-    tab_services: HashMap<String, Arc<dyn TabService>>,
-    default_tab_network: Option<String>,
+    tab_service: Option<Arc<dyn TabService>>,
     exact: Option<Arc<dyn ExactService>>,
 }
 
 impl AppState {
     pub fn new(
         four_mica: Vec<FourMicaHandler>,
-        tab_services: HashMap<String, Arc<dyn TabService>>,
-        default_tab_network: Option<String>,
+        tab_service: Option<Arc<dyn TabService>>,
         exact: Option<Arc<dyn ExactService>>,
     ) -> Self {
         Self {
             four_mica,
-            tab_services,
-            default_tab_network,
+            tab_service,
             exact,
         }
     }
@@ -176,24 +172,10 @@ impl AppState {
         &self,
         request: &CreateTabRequest,
     ) -> Result<CreateTabResponse, TabError> {
-        if self.tab_services.is_empty() {
-            return Err(TabError::Unsupported);
+        match &self.tab_service {
+            Some(service) => service.create_tab(request).await,
+            None => Err(TabError::Unsupported),
         }
-        let requested = request
-            .network
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(crate::config::normalize_network_id)
-            .or_else(|| self.default_tab_network.clone());
-        let Some(network) = requested else {
-            return Err(TabError::Unsupported);
-        };
-        let service = self
-            .tab_services
-            .get(&network)
-            .ok_or_else(|| TabError::UnsupportedNetwork(network.clone()))?;
-        service.create_tab(request).await
     }
 }
 
@@ -652,8 +634,6 @@ pub enum ValidationError {
 pub enum TabError {
     #[error("4mica tab provisioning is disabled")]
     Unsupported,
-    #[error("unsupported network {0}")]
-    UnsupportedNetwork(String),
     #[error("{0}")]
     Invalid(String),
     #[error("{message}")]

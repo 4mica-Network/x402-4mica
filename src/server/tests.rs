@@ -1,9 +1,6 @@
-use std::{
-    collections::HashMap,
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
 };
 
 use async_trait::async_trait;
@@ -170,7 +167,7 @@ async fn settle_endpoint_returns_certificate() {
     assert!(payload.success);
     assert!(payload.certificate.is_some());
     assert!(payload.tx_hash.is_none());
-    assert_eq!(payload.network_id.as_deref(), Some("eip155:11155111"));
+    assert_eq!(payload.network_id.as_deref(), Some("sepolia-mainnet"));
     assert_eq!(verifier.verify_calls(), 1);
     assert_eq!(issuer.issue_calls(), 1);
 }
@@ -199,7 +196,7 @@ async fn settle_accepts_payload_without_top_level_version() {
     assert!(payload.success);
     assert!(payload.certificate.is_some());
     assert!(payload.tx_hash.is_none());
-    assert_eq!(payload.network_id.as_deref(), Some("eip155:11155111"));
+    assert_eq!(payload.network_id.as_deref(), Some("sepolia-mainnet"));
     assert_eq!(verifier.verify_calls(), 1);
     assert_eq!(issuer.issue_calls(), 1);
 }
@@ -228,7 +225,7 @@ async fn settle_endpoint_accepts_v2_payload() {
     assert!(payload.success);
     assert!(payload.certificate.is_some());
     assert!(payload.tx_hash.is_none());
-    assert_eq!(payload.network_id.as_deref(), Some("eip155:11155111"));
+    assert_eq!(payload.network_id.as_deref(), Some("sepolia-mainnet"));
     assert_eq!(verifier.verify_calls(), 1);
     assert_eq!(issuer.issue_calls(), 1);
 }
@@ -258,7 +255,7 @@ async fn supported_endpoint_returns_configured_kind() {
     assert!(
         kinds
             .iter()
-            .any(|k| k["scheme"] == "4mica-credit" && k["network"] == "eip155:11155111")
+            .any(|k| k["scheme"] == "4mica-credit" && k["network"] == "sepolia-mainnet")
     );
 }
 
@@ -268,16 +265,14 @@ async fn supported_includes_exact_when_available() {
     let issuer = Arc::new(MockIssuer::success());
     let handler = FourMicaHandler::new(
         "4mica-credit".into(),
-        "eip155:11155111".into(),
+        "sepolia-mainnet".into(),
         verifier as Arc<dyn CertificateValidator>,
         issuer as Arc<dyn GuaranteeIssuer>,
     );
     let exact = Arc::new(MockExact::new());
-    let (tab_services, default_tab_network) = empty_tab_services();
     let state = AppState::new(
         vec![handler],
-        tab_services,
-        default_tab_network,
+        None,
         Some(exact.clone() as Arc<dyn ExactService>),
     );
     let router = build_router(Arc::new(state));
@@ -326,7 +321,7 @@ async fn supported_includes_v2_kind() {
     let payload: Value = serde_json::from_slice(&body).unwrap();
     let kinds = payload["kinds"].as_array().expect("kinds array");
     assert!(kinds.iter().any(|k| {
-        k["scheme"] == "4mica-credit" && k["network"] == "eip155:11155111" && k["x402Version"] == 2
+        k["scheme"] == "4mica-credit" && k["network"] == "sepolia-mainnet" && k["x402Version"] == 2
     }));
 }
 
@@ -366,12 +361,9 @@ async fn tabs_endpoint_returns_response_from_service() {
         next_req_id: "0x0".into(),
     };
     let service = Arc::new(MockTabService::success(tab_response.clone()));
-    let (tab_services, default_tab_network) =
-        tab_services_with_default("eip155:11155111", service as Arc<dyn TabService>);
     let state = Arc::new(AppState::new(
         Vec::new(),
-        tab_services,
-        default_tab_network,
+        Some(service as Arc<dyn TabService>),
         None,
     ));
     let router = build_router(state);
@@ -379,7 +371,6 @@ async fn tabs_endpoint_returns_response_from_service() {
     let request = CreateTabRequest {
         user_address: "0xabc".into(),
         recipient_address: "0xdef".into(),
-        network: None,
         erc20_token: Some("0xeee".into()),
         ttl_seconds: Some(60),
     };
@@ -396,19 +387,12 @@ async fn tabs_endpoint_returns_response_from_service() {
 
 #[tokio::test]
 async fn tabs_endpoint_returns_not_implemented_when_disabled() {
-    let (tab_services, default_tab_network) = empty_tab_services();
-    let state = Arc::new(AppState::new(
-        Vec::new(),
-        tab_services,
-        default_tab_network,
-        None,
-    ));
+    let state = Arc::new(AppState::new(Vec::new(), None, None));
     let router = build_router(state);
 
     let request = CreateTabRequest {
         user_address: "0xabc".into(),
         recipient_address: "0xdef".into(),
-        network: None,
         erc20_token: Some("0xeee".into()),
         ttl_seconds: None,
     };
@@ -432,12 +416,9 @@ async fn tabs_endpoint_propagates_upstream_errors() {
         status: StatusCode::BAD_REQUEST,
         message: "user not registered".into(),
     }));
-    let (tab_services, default_tab_network) =
-        tab_services_with_default("eip155:11155111", service as Arc<dyn TabService>);
     let state = Arc::new(AppState::new(
         Vec::new(),
-        tab_services,
-        default_tab_network,
+        Some(service as Arc<dyn TabService>),
         None,
     ));
     let router = build_router(state);
@@ -445,7 +426,6 @@ async fn tabs_endpoint_propagates_upstream_errors() {
     let request = CreateTabRequest {
         user_address: "0xabc".into(),
         recipient_address: "0xdef".into(),
-        network: None,
         erc20_token: Some("0xeee".into()),
         ttl_seconds: Some(60),
     };
@@ -640,47 +620,22 @@ async fn settle_rejects_mismatched_versions() {
 fn test_state(verifier: Arc<MockVerifier>, issuer: Arc<MockIssuer>) -> SharedState {
     let handler = FourMicaHandler::new(
         "4mica-credit".into(),
-        "eip155:11155111".into(),
+        "sepolia-mainnet".into(),
         verifier.clone() as Arc<dyn CertificateValidator>,
         issuer.clone() as Arc<dyn GuaranteeIssuer>,
     );
-    let (tab_services, default_tab_network) = empty_tab_services();
-    Arc::new(AppState::new(
-        vec![handler],
-        tab_services,
-        default_tab_network,
-        None,
-    ))
-}
-
-fn empty_tab_services() -> (HashMap<String, Arc<dyn TabService>>, Option<String>) {
-    (HashMap::new(), None)
-}
-
-fn tab_services_with_default(
-    network: &str,
-    service: Arc<dyn TabService>,
-) -> (HashMap<String, Arc<dyn TabService>>, Option<String>) {
-    let mut map = HashMap::new();
-    map.insert(network.to_string(), service);
-    (map, Some(network.to_string()))
+    Arc::new(AppState::new(vec![handler], None, None))
 }
 
 fn exact_state(exact: Arc<MockExact>) -> SharedState {
     let exact_service: Arc<dyn ExactService> = exact;
-    let (tab_services, default_tab_network) = empty_tab_services();
-    Arc::new(AppState::new(
-        Vec::new(),
-        tab_services,
-        default_tab_network,
-        Some(exact_service),
-    ))
+    Arc::new(AppState::new(Vec::new(), None, Some(exact_service)))
 }
 
 fn sample_requirements() -> PaymentRequirements {
     PaymentRequirements {
         scheme: "4mica-credit".into(),
-        network: "eip155:11155111".into(),
+        network: "sepolia-mainnet".into(),
         max_amount_required: "10".into(),
         amount: None,
         resource: None,
@@ -700,7 +655,7 @@ fn sample_requirements() -> PaymentRequirements {
 fn sample_requirements_v2(amount: &str) -> PaymentRequirements {
     PaymentRequirements {
         scheme: "4mica-credit".into(),
-        network: "eip155:11155111".into(),
+        network: "sepolia-mainnet".into(),
         max_amount_required: "".into(),
         amount: Some(amount.into()),
         resource: None,
@@ -718,7 +673,7 @@ fn sample_requirements_v2(amount: &str) -> PaymentRequirements {
 }
 
 fn payment_payload_v1(amount: &str) -> X402PaymentPayload {
-    payment_payload_v1_with_scheme("4mica-credit", "eip155:11155111", amount)
+    payment_payload_v1_with_scheme("4mica-credit", "sepolia-mainnet", amount)
 }
 
 fn payment_payload_v1_with_scheme(scheme: &str, network: &str, amount: &str) -> X402PaymentPayload {
@@ -754,7 +709,7 @@ fn payment_payload_v2(amount: &str) -> X402PaymentPayload {
         "x402Version": 2,
         "accepted": {
             "scheme": "4mica-credit",
-            "network": "eip155:11155111",
+            "network": "sepolia-mainnet",
             "amount": amount,
             "payTo": recipient,
             "asset": asset
@@ -849,14 +804,14 @@ impl ExactService for MockExact {
             true,
             None,
             Some("0xdeadbeef".into()),
-            "eip155:8453".into(),
+            "base".into(),
         ))
     }
 
     async fn supported(&self) -> Result<Vec<SupportedKind>, ValidationError> {
         Ok(vec![SupportedKind {
             scheme: "exact".into(),
-            network: "eip155:8453".into(),
+            network: "base".into(),
             x402_version: Some(1),
             extra: None,
         }])
@@ -904,7 +859,6 @@ impl TabService for MockTabService {
 fn clone_tab_error(err: &TabError) -> TabError {
     match err {
         TabError::Unsupported => TabError::Unsupported,
-        TabError::UnsupportedNetwork(network) => TabError::UnsupportedNetwork(network.clone()),
         TabError::Invalid(message) => TabError::Invalid(message.clone()),
         TabError::Upstream { status, message } => TabError::Upstream {
             status: *status,
@@ -921,10 +875,10 @@ async fn verify_routes_to_exact_service() {
 
     let request_body = VerifyRequest {
         x402_version: Some(1),
-        payment_payload: payment_payload_v1_with_scheme("exact", "eip155:8453", "10"),
+        payment_payload: payment_payload_v1_with_scheme("exact", "base", "10"),
         payment_requirements: PaymentRequirements {
             scheme: "exact".into(),
-            network: "eip155:8453".into(),
+            network: "base".into(),
             max_amount_required: "1000".into(),
             amount: None,
             resource: None,
@@ -959,10 +913,10 @@ async fn settle_routes_to_exact_service() {
 
     let request_body = SettleRequest {
         x402_version: Some(1),
-        payment_payload: payment_payload_v1_with_scheme("exact", "eip155:8453", "10"),
+        payment_payload: payment_payload_v1_with_scheme("exact", "base", "10"),
         payment_requirements: PaymentRequirements {
             scheme: "exact".into(),
-            network: "eip155:8453".into(),
+            network: "base".into(),
             max_amount_required: "1000".into(),
             amount: None,
             resource: None,
