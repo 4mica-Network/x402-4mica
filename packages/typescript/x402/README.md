@@ -50,6 +50,8 @@ app.listen(3000, () => {
 
 ## Quick Start (Client)
 
+### Using with Fetch
+
 Use with `@x402/fetch` for automatic payment handling:
 
 ```typescript
@@ -76,6 +78,38 @@ const fetchWithPayment = wrapFetchWithPaymentFromConfig(fetch, {
 // Make requests - payments are handled automatically
 const response = await fetchWithPayment("https://api.example.com/premium-content");
 const data = await response.json();
+console.log(data);
+```
+
+### Using with Axios
+
+Use with `@x402/axios` for Axios-based applications:
+
+```typescript
+import axios from "axios";
+import { wrapAxiosWithPaymentFromConfig } from "@x402/axios";
+import { FourMicaEvmScheme } from "@x402/4mica/client";
+import { privateKeyToAccount } from "viem/accounts";
+
+// Create an EVM account
+const account = privateKeyToAccount("0xYourPrivateKey");
+
+// Create the 4mica scheme client
+const scheme = await FourMicaEvmScheme.create(account);
+
+// Wrap axios instance with payment handling
+const api = wrapAxiosWithPaymentFromConfig(axios.create(), {
+  schemes: [
+    {
+      network: "eip155:11155111", // Ethereum Sepolia
+      client: scheme,
+    },
+  ],
+});
+
+// Make requests - payments are handled automatically
+const response = await api.get("https://api.example.com/premium-content");
+const data = response.data;
 console.log(data);
 ```
 
