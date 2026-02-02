@@ -4,7 +4,7 @@ use anyhow::Context;
 use async_trait::async_trait;
 use reqwest::{Client, Url};
 use tracing::{info, warn};
-use x402_rs::chain::ChainRegistry;
+use x402_rs::chain::{ChainRegistry, FromConfig};
 use x402_rs::config::Config as X402Config;
 use x402_rs::facilitator::Facilitator;
 use x402_rs::facilitator_local::FacilitatorLocal;

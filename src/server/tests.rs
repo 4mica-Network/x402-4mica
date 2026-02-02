@@ -8,7 +8,7 @@ use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode},
 };
-use rust_sdk_4mica::{Address, BLSCert, PaymentGuaranteeClaims, U256};
+use sdk_4mica::{Address, BLSCert, PaymentGuaranteeClaims, U256};
 use serde::Serialize;
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -1023,7 +1023,7 @@ impl GuaranteeIssuer for MockIssuer {
         &self,
         _claims: rpc::PaymentGuaranteeRequestClaims,
         _signature: String,
-        _scheme: rust_sdk_4mica::SigningScheme,
+        _scheme: sdk_4mica::SigningScheme,
     ) -> Result<BLSCert, String> {
         self.issue_calls.fetch_add(1, Ordering::SeqCst);
         if self.fail {

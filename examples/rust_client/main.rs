@@ -4,7 +4,8 @@ use std::io::ErrorKind;
 use anyhow::{Context, Result};
 use dotenvy::from_filename;
 use reqwest::StatusCode;
-use rust_sdk_4mica::{Client, ConfigBuilder, U256, X402Flow, x402::PaymentRequirements};
+use rpc::PaymentGuaranteeRequestClaims as RpcPaymentGuaranteeRequestClaims;
+use sdk_4mica::{Client, ConfigBuilder, U256, X402Flow, x402::PaymentRequirements};
 use serde::Deserialize;
 
 fn load_env_files() {
@@ -83,7 +84,7 @@ async fn main() -> Result<()> {
         .wallet_private_key(payer_key)
         .build()
         .context("invalid SDK config")?;
-    let core = Client::new(config)
+    let core: Client = Client::new(config)
         .await
         .context("failed to init 4mica core client")?;
 
@@ -118,14 +119,18 @@ async fn main() -> Result<()> {
 
     // Prepare the payment requirements and signature. The resource server will call
     // /verify and /settle; the client only needs to attach the X-PAYMENT header.
-    let payment = flow
+    let payment: sdk_4mica::x402::X402SignedPayment = flow
         .sign_payment(payment_requirements, user_address)
         .await
         .context("failed to prepare payment")?;
 
-    let payment_asset = &payment.claims.asset_address;
+    let (payment_asset, payment_tab_id, actual_amount) = match &payment.payload.claims {
+        RpcPaymentGuaranteeRequestClaims::V1(claims) => {
+            (claims.asset_address.as_str(), claims.tab_id, claims.amount)
+        }
+    };
     println!("Payment asset address: {payment_asset}");
-    println!("Payment tabId: {:#x}", payment.claims.tab_id);
+    println!("Payment tabId: {:#x}", payment_tab_id);
 
     // Sanity checks against the desired USDC flow.
     if !payment_asset.eq_ignore_ascii_case(&asset_address) {
@@ -136,7 +141,6 @@ async fn main() -> Result<()> {
 
     // Expect 0.0001 units (100 base units) if your resource advertises that price.
     let expected_amount = U256::from(100u64);
-    let actual_amount = payment.claims.amount;
     if actual_amount != expected_amount {
         eprintln!(
             "warning: claims.amount is {} (expected 100 base units)",

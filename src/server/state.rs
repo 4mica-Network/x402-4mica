@@ -11,11 +11,12 @@ use rpc::{
     PaymentGuaranteeClaims, PaymentGuaranteeRequest, PaymentGuaranteeRequestClaims,
     PaymentGuaranteeRequestClaimsV1,
 };
-use rust_sdk_4mica::{Address, U256};
+use sdk_4mica::{Address, U256};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::error;
 
+use crate::auth::AuthSession;
 use crate::server::model::{
     CoreCreateTabRequest, CoreCreateTabResponse, CreateTabRequest, CreateTabResponse,
     PaymentRequirements, SettleRequest, SettleResponse, SupportedKind, VerifyRequest,
@@ -247,7 +248,7 @@ impl FourMicaHandler {
         )?;
         self.validate_payment_payload(&payload, &request.payment_requirements, x402_version)?;
 
-        let certificate = self
+        let certificate: sdk_4mica::BLSCert = self
             .issuer
             .issue(payload.claims.clone(), payload.signature, payload.scheme)
             .await
@@ -435,14 +436,20 @@ pub(crate) struct CoreTabService {
     client: Client,
     base_url: Url,
     default_asset_address: Option<String>,
+    auth: Option<Arc<AuthSession>>,
 }
 
 impl CoreTabService {
-    pub fn new(base_url: Url, default_asset_address: Option<String>) -> Self {
+    pub fn new(
+        base_url: Url,
+        default_asset_address: Option<String>,
+        auth: Option<Arc<AuthSession>>,
+    ) -> Self {
         Self {
             client: Client::new(),
             base_url,
             default_asset_address,
+            auth,
         }
     }
 
@@ -458,10 +465,19 @@ impl CoreTabService {
         Resp: for<'de> Deserialize<'de>,
     {
         let url = self.url(path)?;
-        let response = self
-            .client
-            .post(url)
-            .json(payload)
+        let mut request = self.client.post(url).json(payload);
+        if let Some(auth) = &self.auth {
+            let token = auth
+                .access_token()
+                .await
+                .map_err(|err| TabError::Upstream {
+                    status: StatusCode::BAD_GATEWAY,
+                    message: err.to_string(),
+                })?;
+            request = request.bearer_auth(token);
+        }
+
+        let response = request
             .send()
             .await
             .inspect_err(|err| error!(reason = %err, "failed to POST to tab service"))

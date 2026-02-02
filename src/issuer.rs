@@ -1,8 +1,11 @@
 use async_trait::async_trait;
 use reqwest::Url;
 use rpc::{PaymentGuaranteeRequest, PaymentGuaranteeRequestClaims, SigningScheme};
-use rust_sdk_4mica::BLSCert;
+use sdk_4mica::BLSCert;
+use std::sync::Arc;
 use tracing::debug;
+
+use crate::auth::AuthSession;
 
 #[async_trait]
 pub trait GuaranteeIssuer: Send + Sync {
@@ -17,13 +20,15 @@ pub trait GuaranteeIssuer: Send + Sync {
 pub struct LiveGuaranteeIssuer {
     client: reqwest::Client,
     base_url: Url,
+    auth: Option<Arc<AuthSession>>,
 }
 
 impl LiveGuaranteeIssuer {
-    pub fn try_new(base_url: Url) -> anyhow::Result<Self> {
+    pub fn try_new(base_url: Url, auth: Option<Arc<AuthSession>>) -> anyhow::Result<Self> {
         Ok(Self {
             client: reqwest::Client::new(),
             base_url,
+            auth,
         })
     }
 }
@@ -44,13 +49,13 @@ impl GuaranteeIssuer for LiveGuaranteeIssuer {
         let payload = serde_json::to_string(&body).unwrap_or_else(|_| "<serialize_failed>".into());
         debug!(url = %url, payload = %payload, "Sending core guarantee request");
 
-        let response = self
-            .client
-            .post(url)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|err| err.to_string())?;
+        let mut request = self.client.post(url).json(&body);
+        if let Some(auth) = &self.auth {
+            let token = auth.access_token().await.map_err(|err| err.to_string())?;
+            request = request.bearer_auth(token);
+        }
+
+        let response = request.send().await.map_err(|err| err.to_string())?;
 
         let status = response.status();
         let bytes = response.bytes().await.map_err(|err| err.to_string())?;

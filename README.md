@@ -271,7 +271,7 @@ Payers sign guarantees instead of EIP-3009 transfers. Use the official SDK `rust
    remaining parameters (domain separator, operator key, etc.) from `X402_CORE_API_URL`.
 
    ```rust
-   use rust_sdk_4mica::{Client, ConfigBuilder};
+   use sdk_4mica::{Client, ConfigBuilder};
 
    let config = ConfigBuilder::default()
        .rpc_url("https://api.4mica.xyz/".into())
@@ -289,7 +289,7 @@ Payers sign guarantees instead of EIP-3009 transfers. Use the official SDK `rust
    choose a signing scheme (usually `SigningScheme::Eip712`), and call `client.user.sign_payment`.
 
    ```rust
-   use rust_sdk_4mica::{PaymentGuaranteeClaims, SigningScheme, U256};
+   use sdk_4mica::{PaymentGuaranteeClaims, SigningScheme, U256};
 
    let claims = PaymentGuaranteeClaims {
        user_address: payer_wallet.clone(),
@@ -319,7 +319,7 @@ Payers sign guarantees instead of EIP-3009 transfers. Use the official SDK `rust
    outstanding credit with the exact asset used when the tab was opened:
 
    ```rust
-   use rust_sdk_4mica::U256;
+   use sdk_4mica::U256;
 
    let receipt = client
        .user

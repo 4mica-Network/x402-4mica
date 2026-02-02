@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use rpc::{
     PaymentGuaranteeRequest, PaymentGuaranteeRequestClaims, PaymentGuaranteeRequestClaimsV1,
 };
-use rust_sdk_4mica::{BLSCert, U256};
+use sdk_4mica::{BLSCert, U256};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
