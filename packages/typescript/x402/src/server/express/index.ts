@@ -10,9 +10,9 @@ import {
 } from '@x402/core/server'
 import { SchemeNetworkServer, Network } from '@x402/core/types'
 import { NextFunction, Request, Response } from 'express'
-import { ExpressAdapter } from './adapter'
-import { FourMicaEvmScheme, SUPPORTED_NETWORKS } from '../scheme'
-import { FourMicaFacilitatorClient } from '../facilitator'
+import { ExpressAdapter } from './adapter.js'
+import { FourMicaEvmScheme, SUPPORTED_NETWORKS } from '../scheme.js'
+import { FourMicaFacilitatorClient } from '../facilitator.js'
 
 /**
  * Configuration for payment tab handling
@@ -461,20 +461,4 @@ export function paymentMiddlewareFromConfig(
   )
 }
 
-export { x402ResourceServer, x402HTTPResourceServer } from '@x402/core/server'
-
-export type {
-  PaymentRequired,
-  PaymentRequirements,
-  PaymentPayload,
-  Network,
-  SchemeNetworkServer,
-} from '@x402/core/types'
-
-export type { PaywallProvider, PaywallConfig } from '@x402/core/server'
-
-export { RouteConfigurationError } from '@x402/core/server'
-
-export type { RouteValidationError } from '@x402/core/server'
-
-export { ExpressAdapter } from './adapter'
+export { ExpressAdapter } from './adapter.js'

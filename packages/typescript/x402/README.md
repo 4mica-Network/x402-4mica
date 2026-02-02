@@ -1,18 +1,18 @@
-# @x402/4mica
+# @4mica/x402
 
 Express middleware and client integration for the x402 Payment Protocol with 4mica credit flow support. This package provides batteries-included middleware for adding 4mica payment requirements to your Express.js applications, with automatic facilitator and scheme registration.
 
 ## Installation
 
 ```bash
-pnpm install @x402/4mica
+pnpm install @4mica/x402
 ```
 
 ## Quick Start (Server)
 
 ```typescript
 import express from "express";
-import { paymentMiddlewareFromConfig } from "@x402/4mica/server";
+import { paymentMiddlewareFromConfig } from "@4mica/x402/server/express";
 
 const app = express();
 app.use(express.json());
@@ -56,7 +56,7 @@ Use with `@x402/fetch` for automatic payment handling:
 
 ```typescript
 import { wrapFetchWithPaymentFromConfig } from "@x402/fetch";
-import { FourMicaEvmScheme } from "@x402/4mica/client";
+import { FourMicaEvmScheme } from "@4mica/x402/client";
 import { privateKeyToAccount } from "viem/accounts";
 
 // Create an EVM account
@@ -88,7 +88,7 @@ Use with `@x402/axios` for Axios-based applications:
 ```typescript
 import axios from "axios";
 import { wrapAxiosWithPaymentFromConfig } from "@x402/axios";
-import { FourMicaEvmScheme } from "@x402/4mica/client";
+import { FourMicaEvmScheme } from "@4mica/x402/client";
 import { privateKeyToAccount } from "viem/accounts";
 
 // Create an EVM account
@@ -168,11 +168,11 @@ For advanced scenarios where you need additional payment schemes or custom confi
 #### Using `paymentMiddleware` with Custom Server
 
 ```typescript
+import { paymentMiddleware } from "@4mica/x402/server/express";
 import { 
-  paymentMiddleware, 
   x402ResourceServer,
   FourMicaFacilitatorClient,
-} from "@x402/4mica/server";
+} from "@4mica/x402/server";
 import { ExactEvmScheme } from "@x402/evm/exact/server";
 import { HTTPFacilitatorClient } from "@x402/core/server";
 
@@ -208,12 +208,12 @@ app.use(
 #### Using `paymentMiddlewareFromHTTPServer` with HTTP Hooks
 
 ```typescript
+import { paymentMiddlewareFromHTTPServer } from "@4mica/x402/server/express";
 import {
-  paymentMiddlewareFromHTTPServer,
   x402ResourceServer,
   x402HTTPResourceServer,
   FourMicaFacilitatorClient,
-} from "@x402/4mica/server";
+} from "@4mica/x402/server";
 
 // Create 4mica facilitator
 const fourMicaFacilitator = new FourMicaFacilitatorClient();
@@ -245,7 +245,7 @@ app.use(
 The client scheme implementation for 4mica payments on EVM networks.
 
 ```typescript
-import { FourMicaEvmScheme } from "@x402/4mica/client";
+import { FourMicaEvmScheme } from "@4mica/x402/client";
 import { Client, ConfigBuilder } from "sdk-4mica";
 import { privateKeyToAccount } from "viem/accounts";
 
@@ -267,7 +267,7 @@ const scheme2 = await FourMicaEvmScheme.create(account, client);
 
 ```typescript
 import { wrapFetchWithPaymentFromConfig } from "@x402/fetch";
-import { FourMicaEvmScheme } from "@x402/4mica/client";
+import { FourMicaEvmScheme } from "@4mica/x402/client";
 
 const sepoliaScheme = await FourMicaEvmScheme.create(sepoliaAccount);
 const amoyScheme = await FourMicaEvmScheme.create(amoyAccount);
@@ -290,7 +290,7 @@ const fetchWithPayment = wrapFetchWithPaymentFromConfig(fetch, {
 
 ```typescript
 import { wrapFetchWithPayment, x402Client } from "@x402/fetch";
-import { FourMicaEvmScheme } from "@x402/4mica/client";
+import { FourMicaEvmScheme } from "@4mica/x402/client";
 
 const scheme = await FourMicaEvmScheme.create(account);
 
@@ -306,7 +306,7 @@ const fetchWithPayment = wrapFetchWithPayment(fetch, client);
 
 ```typescript
 import express from "express";
-import { paymentMiddlewareFromConfig } from "@x402/4mica/server";
+import { paymentMiddlewareFromConfig } from "@4mica/x402/server/express";
 
 const app = express();
 app.use(express.json());
@@ -355,7 +355,7 @@ app.listen(3000);
 
 ```typescript
 import { wrapFetchWithPaymentFromConfig } from "@x402/fetch";
-import { FourMicaEvmScheme } from "@x402/4mica/client";
+import { FourMicaEvmScheme } from "@4mica/x402/client";
 import { privateKeyToAccount } from "viem/accounts";
 
 async function main() {

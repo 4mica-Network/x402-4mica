@@ -1,1 +1,1 @@
-export * from './scheme'
+export * from './scheme.js'

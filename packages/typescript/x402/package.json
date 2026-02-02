@@ -5,6 +5,24 @@
   "description": "TypeScript x402 utilities for interacting with the 4Mica payment network",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./server": {
+      "types": "./dist/server/index.d.ts",
+      "import": "./dist/server/index.js"
+    },
+    "./server/express": {
+      "types": "./dist/server/express/index.d.ts",
+      "import": "./dist/server/express/index.js"
+    },
+    "./client": {
+      "types": "./dist/client/index.d.ts",
+      "import": "./dist/client/index.js"
+    }
+  },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "test": "vitest run",
@@ -17,6 +35,7 @@
     "sdk-4mica": "file:../../../../ts-sdk-4mica"
   },
   "devDependencies": {
+    "@arethetypeswrong/cli": "^0.18.2",
     "@eslint/js": "^9.39.2",
     "@types/express": "^5.0.6",
     "@types/node": "^25.0.7",
