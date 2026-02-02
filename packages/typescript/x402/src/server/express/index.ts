@@ -431,14 +431,17 @@ export function paymentMiddlewareFromConfig(
   paywall?: PaywallProvider,
   syncFacilitatorOnStart: boolean = true
 ) {
-  if (
-    !facilitatorClients ||
-    (Array.isArray(facilitatorClients) && facilitatorClients.length === 0)
-  ) {
-    facilitatorClients = [new FourMicaFacilitatorClient()]
+  const facilitators = facilitatorClients
+    ? Array.isArray(facilitatorClients)
+      ? facilitatorClients
+      : [facilitatorClients]
+    : []
+
+  if (!facilitators.some((c) => c instanceof FourMicaFacilitatorClient)) {
+    facilitators.push(new FourMicaFacilitatorClient())
   }
 
-  const ResourceServer = new x402ResourceServer(facilitatorClients)
+  const ResourceServer = new x402ResourceServer(facilitators)
 
   if (schemes) {
     schemes.forEach(({ network, server: schemeServer }) => {
