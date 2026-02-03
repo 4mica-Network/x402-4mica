@@ -240,29 +240,6 @@ app.use(
 
 ## Client Configuration
 
-### `FourMicaEvmScheme`
-
-The client scheme implementation for 4mica payments on EVM networks.
-
-```typescript
-import { FourMicaEvmScheme } from "@4mica/x402/client";
-import { Client, ConfigBuilder } from "@4mica/sdk";
-import { privateKeyToAccount } from "viem/accounts";
-
-const account = privateKeyToAccount("0xYourPrivateKey");
-
-// Simple creation (uses default 4mica client configuration)
-const scheme1 = await FourMicaEvmScheme.create(account);
-
-// Advanced: Pass custom 4mica client
-const config = new ConfigBuilder()
-  .signer(account)
-  .rpcUrl("https://custom-4mica-api.example.com/")
-  .build();
-const client = await Client.new(config);
-const scheme2 = await FourMicaEvmScheme.create(account, client);
-```
-
 ### Multi-Network Client Setup
 
 ```typescript
