@@ -27,12 +27,16 @@
     "build": "tsc -p tsconfig.build.json",
     "test": "vitest run",
     "lint": "eslint . --ext .ts",
-    "fmt": "prettier --check \"{src,tests}/**/*.{ts,js,json}\""
+    "fmt": "prettier --check \"{src,tests}/**/*.{ts,js,json}\"",
+    "demo:server": "cd demo && yarn server",
+    "demo:client": "cd demo && yarn client",
+    "demo:dev": "cd demo && yarn dev"
   },
   "dependencies": {
     "@x402/core": "^2.2.0",
     "@x402/extensions": "^2.2.0",
-    "sdk-4mica": "file:../../../../ts-sdk-4mica"
+    "@4mica/sdk": "file:../../../../ts-sdk-4mica",
+    "viem": "^2.45.1"
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.18.2",

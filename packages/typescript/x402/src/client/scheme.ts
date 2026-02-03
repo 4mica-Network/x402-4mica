@@ -2,11 +2,11 @@ import { SchemeNetworkClient, PaymentRequirements, PaymentPayload } from '@x402/
 import {
   Client,
   ConfigBuilder,
-  EvmSigner,
   PaymentRequirementsV1,
   X402Flow,
   X402PaymentRequired,
-} from 'sdk-4mica'
+} from '@4mica/sdk'
+import { Account } from 'viem/accounts'
 
 export class FourMicaEvmScheme implements SchemeNetworkClient {
   readonly scheme = '4mica-credit'
@@ -14,16 +14,16 @@ export class FourMicaEvmScheme implements SchemeNetworkClient {
   private readonly x402Flow: X402Flow
 
   private constructor(
-    private readonly signer: EvmSigner,
+    private readonly signer: Account,
     client: Client
   ) {
     this.x402Flow = X402Flow.fromClient(client)
   }
 
-  static async create(signer: EvmSigner, client?: Client): Promise<FourMicaEvmScheme> {
+  static async create(signer: Account, client?: Client): Promise<FourMicaEvmScheme> {
     if (client) return new FourMicaEvmScheme(signer, client)
 
-    const cfg = new ConfigBuilder().signer(signer).build()
+    const cfg = new ConfigBuilder().rpcUrl('https://api.4mica.xyz').signer(signer).build()
     return new FourMicaEvmScheme(signer, await Client.new(cfg))
   }
 

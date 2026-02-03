@@ -246,7 +246,7 @@ The client scheme implementation for 4mica payments on EVM networks.
 
 ```typescript
 import { FourMicaEvmScheme } from "@4mica/x402/client";
-import { Client, ConfigBuilder } from "sdk-4mica";
+import { Client, ConfigBuilder } from "@4mica/sdk";
 import { privateKeyToAccount } from "viem/accounts";
 
 const account = privateKeyToAccount("0xYourPrivateKey");

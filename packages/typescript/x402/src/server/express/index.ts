@@ -1,4 +1,3 @@
-/// <reference path="./x402-core.d.ts" />
 import {
   HTTPRequestContext,
   PaywallConfig,
@@ -40,7 +39,7 @@ interface TabConfig {
 function registerNetworkServers(httpServer: x402HTTPResourceServer, tabEndpoint: string) {
   const schemeServer = new FourMicaEvmScheme(tabEndpoint)
   SUPPORTED_NETWORKS.forEach((network) => {
-    httpServer.server.register(network, schemeServer)
+    ; (httpServer as any).ResourceServer.register(network, schemeServer)
   })
 }
 
@@ -119,10 +118,13 @@ export function paymentMiddlewareFromHTTPServer(
   // Dynamically register bazaar extension if routes declare it and not already registered
   // Skip if pre-registered (e.g., in serverless environments where static imports are used)
   let bazaarPromise: Promise<void> | null = null
-  if (checkIfBazaarNeeded(httpServer.routes) && !httpServer.server.hasExtension('bazaar')) {
+  if (
+    checkIfBazaarNeeded((httpServer as any).routesConfig) &&
+    !(httpServer as any).ResourceServer.hasExtension('bazaar')
+  ) {
     bazaarPromise = import('@x402/extensions/bazaar')
       .then(({ bazaarResourceServerExtension }) => {
-        httpServer.server.registerExtension(bazaarResourceServerExtension)
+        ; (httpServer as any).ResourceServer.registerExtension(bazaarResourceServerExtension)
       })
       .catch((err) => {
         console.error('Failed to load bazaar extension:', err)
