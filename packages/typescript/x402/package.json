@@ -72,5 +72,8 @@
     "@x402/paywall": {
       "optional": true
     }
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
