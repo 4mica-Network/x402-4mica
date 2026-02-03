@@ -32,7 +32,7 @@ cp .env.example .env
 
 Required variables:
 - `PRIVATE_KEY`: Your Ethereum private key (with 0x prefix) for Sepolia testnet
-- `PAY_TO_ADDRESS`: Address that will receive payments (optional, defaults to a test address)
+- `PAY_TO_ADDRESS`: Address that will receive payments
 
 ## Running the Demo
 
@@ -54,7 +54,7 @@ You should see:
 ```
 x402 Demo Server running on http://localhost:3000
 Protected endpoint: http://localhost:3000/api/premium-data
-Payment required: $0.05 (4mica credit on Sepolia)
+Payment required: $0.01 (4mica credit on Sepolia)
 ```
 
 ### Terminal 2: Run the client
@@ -82,7 +82,7 @@ PRIVATE_KEY=0xYourPrivateKey yarn client
 ## What Happens
 
 1. **Server** starts with one protected endpoint: `GET /api/premium-data`
-   - Requires a payment of $0.05 in 4mica credits on Sepolia
+   - Requires a payment of $0.01 in 4mica credits on Sepolia
    - Uses x402 payment protocol
 
 2. **Client** makes a request to the protected endpoint:
