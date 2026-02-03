@@ -40,7 +40,7 @@ JsonDict = Dict[str, Any]
 
 ENV_PATH = Path(__file__).parent.with_name(".env")
 DEFAULT_SCHEME = "4mica-credit"
-DEFAULT_NETWORK = "polygon-amoy"
+DEFAULT_NETWORK = "eip155:80002"
 DEFAULT_MAX_AMOUNT = "100"  
 DEFAULT_ASSET = "0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582"
 DEFAULT_DESCRIPTION = "Demo paid API - 4mica tab verification required"

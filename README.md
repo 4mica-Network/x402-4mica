@@ -24,7 +24,7 @@ the BLS certificate to the recipient.
 ### Quick integration (resource servers)
 
 - Configure the 4mica facilitator (for example `https://x402.4mica.xyz/`) and choose a POST tab endpoint on your API (e.g. `POST https://api.example.com/x402/tab`). Your `402 Payment Required` responses should advertise `scheme = "4mica-credit"`, a supported `network`, and set `payTo` / `asset` / `maxAmountRequired`, embedding your tab endpoint in `paymentRequirements.extra.tabEndpoint`.
-- Implement the tab endpoint to accept `{ userAddress, paymentRequirements }`. For each call, open or reuse a tab by calling the facilitator’s standard `POST /tabs` with `{ userAddress, recipientAddress = payTo, erc20Token = asset, ttlSeconds? }`, then return the tab response (at least `tabId` and `userAddress`) to the client. Cache tabs per (user, recipient, asset) if you want to avoid unnecessary `/tabs` calls – the facilitator will return the existing tab for that combination either way.
+- Implement the tab endpoint to accept `{ userAddress, paymentRequirements }`. For each call, open or reuse a tab by calling the facilitator’s standard `POST /tabs` with `{ userAddress, recipientAddress = payTo, erc20Token = asset, ttlSeconds?, network? }`, then return the tab response (at least `tabId` and `userAddress`) to the client. If you configure multiple networks, pass `network` to target the correct core API URL. Cache tabs per (user, recipient, asset) if you want to avoid unnecessary `/tabs` calls – the facilitator will return the existing tab for that combination either way.
 - Clients combine this tab with your original `paymentRequirements` to build and sign a guarantee, producing the x402 `paymentPayload` that they send on the retried request for the protected resource. You never construct this payload yourself; you only need to validate and consume it.
 - When a request arrives with a payment payload, send it together with the original `paymentRequirements` to the facilitator’s `/verify` and `/settle` endpoints. Use `/verify` as an optional preflight check before doing work, and `/settle` once you are ready to accept credit and obtain the BLS certificate for downstream remuneration.
 
@@ -117,7 +117,7 @@ examples/python_client/requirements.txt`). A TypeScript version lives in `exampl
 {
   "x402Version": 1,
   "scheme": "4mica-credit",
-  "network": "polygon-amoy",
+  "network": "eip155:80002",
   "payload": {
     "claims": {
       "user_address": "<0x-prefixed checksum string>",
@@ -148,7 +148,10 @@ The facilitator enforces that:
   if configured, any additional `exact` flows).
 - `GET /health` – liveness probe that returns `{ "status": "ok" }`.
 - `POST /tabs`
-  - Request: `{ "userAddress", "recipientAddress", "erc20Token"?, "ttlSeconds"? }`.
+  - Request: `{ "userAddress", "recipientAddress", "network"?, "erc20Token"?, "ttlSeconds"? }`.
+    If `network` is omitted the facilitator uses its default network (the first entry in
+    `X402_NETWORKS`).
+    Networks use CAIP-2 identifiers (e.g., `eip155:80002`).
     Use `erc20Token = null` (or omit it) for ETH tabs; otherwise pass the token contract address.
   - Response: `{ "tabId", "userAddress", "recipientAddress", "assetAddress", "startTimestamp", "ttlSeconds", "nextReqId" }`.
     `tabId` is always emitted as a canonical hex string. Recipients call this after a user shares
@@ -224,7 +227,7 @@ The facilitator can transparently replace the EIP-3009/x402 debit flow. The key 
    (or the TypeScript `CC_FACILITATOR_URL`). This host validates guarantee envelopes and returns BLS
    certificates instead of ERC-3009 receipts.
 2. **Provision tabs before issuing requirements** – whenever a user shares their wallet, call
-   `POST https://x402.4mica.xyz/tabs` with `{ userAddress, recipientAddress, erc20Token?, ttlSeconds? }`.
+   `POST https://x402.4mica.xyz/tabs` with `{ userAddress, recipientAddress, network?, erc20Token?, ttlSeconds? }`.
    Cache `{ tabId, assetAddress, startTimestamp, ttlSeconds }` and reuse that tab per
    `(user, recipient, asset)` combination.
 3. **Emit credit-flavoured `paymentRequirements`** – embed the latest tab metadata and switch the
@@ -233,7 +236,7 @@ The facilitator can transparently replace the EIP-3009/x402 debit flow. The key 
    ```jsonc
    {
      "scheme": "4mica-credit",
-     "network": "polygon-amoy",
+     "network": "eip155:80002",
      "maxAmountRequired": "<decimal or 0x amount>",
      "resource": "/your/resource",
      "description": "Describe the protected work",
@@ -252,7 +255,7 @@ The facilitator can transparently replace the EIP-3009/x402 debit flow. The key 
    match the tab exactly, so keep them synchronized.
 
 4. **Expect credit certificates during settlement** – `/verify` still performs structural checks and
-   `/settle` now returns `{ success, networkId: "polygon-amoy", certificate: { claims, signature } }`.
+   `/settle` now returns `{ success, networkId: "eip155:80002", certificate: { claims, signature } }`.
    Persist the certificate if you need to downstream claim remuneration via 4mica core.
 
 ### Changes clients (payers) must make
@@ -308,7 +311,7 @@ Payers sign guarantees instead of EIP-3009 transfers. Use the official SDK `rust
    ```
 
 5. **Build the payment payload** – construct `{ x402Version: 1, scheme: "4mica-credit", network:
-"polygon-amoy", payload: { claims, signature, scheme: "eip712" } }` (see
+"eip155:80002", payload: { claims, signature, scheme: "eip712" } }` (see
 `examples/rust_client/main.rs` or `examples/python_client/client.py`) and send it alongside the retrying
    HTTP request.
 6. **Settle your tabs** – every tab response includes `ttlSeconds`, which is the settlement window in
@@ -342,10 +345,11 @@ Environment variables (defaults shown):
 export HOST=0.0.0.0
 export PORT=8080
 export X402_SCHEME=4mica-credit
-# List of supported networks (JSON). Each entry must include `{ "network", "coreApiUrl" }`.
-export X402_NETWORKS='[{"network":"polygon-amoy","coreApiUrl":"https://api.4mica.xyz/"}]'
+# List of supported networks (JSON). Each entry must include `{ "network", "coreApiUrl" }`
+# where `network` is a CAIP-2 identifier (e.g., `eip155:80002`).
+export X402_NETWORKS='[{"network":"eip155:80002","coreApiUrl":"https://api.4mica.xyz/"}]'
 # Legacy single-network fallback if X402_NETWORKS is unset
-export X402_NETWORK=polygon-amoy
+export X402_NETWORK=eip155:80002
 
 # 4mica public API – used to fetch operator parameters
 export X402_CORE_API_URL=https://api.4mica.xyz/

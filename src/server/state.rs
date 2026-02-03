@@ -17,6 +17,7 @@ use thiserror::Error;
 use tracing::error;
 
 use crate::auth::AuthSession;
+use crate::config::validate_caip2_network;
 use crate::server::model::{
     CoreCreateTabRequest, CoreCreateTabResponse, CreateTabRequest, CreateTabResponse,
     PaymentRequirements, SettleRequest, SettleResponse, SupportedKind, VerifyRequest,
@@ -32,21 +33,29 @@ const SUPPORTED_VERSIONS: [u8; 2] = [1, 2];
 
 pub(super) type SharedState = Arc<AppState>;
 
+pub(crate) struct NetworkTabService {
+    pub network: String,
+    pub service: Arc<dyn TabService>,
+}
+
 pub(crate) struct AppState {
     four_mica: Vec<FourMicaHandler>,
-    tab_service: Option<Arc<dyn TabService>>,
+    tab_services: Vec<NetworkTabService>,
+    default_tab_network: Option<String>,
     exact: Option<Arc<dyn ExactService>>,
 }
 
 impl AppState {
     pub fn new(
         four_mica: Vec<FourMicaHandler>,
-        tab_service: Option<Arc<dyn TabService>>,
+        tab_services: Vec<NetworkTabService>,
+        default_tab_network: Option<String>,
         exact: Option<Arc<dyn ExactService>>,
     ) -> Self {
         Self {
             four_mica,
-            tab_service,
+            tab_services,
+            default_tab_network,
             exact,
         }
     }
@@ -173,10 +182,31 @@ impl AppState {
         &self,
         request: &CreateTabRequest,
     ) -> Result<CreateTabResponse, TabError> {
-        match &self.tab_service {
-            Some(service) => service.create_tab(request).await,
-            None => Err(TabError::Unsupported),
+        if self.tab_services.is_empty() {
+            return Err(TabError::Unsupported);
         }
+
+        let requested_network = request
+            .network
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if let Some(network) = requested_network {
+            validate_caip2_network(network).map_err(|err| TabError::Invalid(err.to_string()))?;
+        }
+
+        let requested = requested_network.or(self.default_tab_network.as_deref());
+        let Some(network) = requested else {
+            return Err(TabError::Unsupported);
+        };
+
+        let service = self
+            .tab_services
+            .iter()
+            .find(|entry| entry.network == network)
+            .map(|entry| entry.service.as_ref())
+            .ok_or_else(|| TabError::Invalid(format!("unsupported network {network}")))?;
+        service.create_tab(request).await
     }
 }
 

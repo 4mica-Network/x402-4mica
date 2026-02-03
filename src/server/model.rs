@@ -172,6 +172,9 @@ pub struct PaymentRequirements {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateTabRequest {
+    #[serde(default)]
+    #[serde(alias = "networkId", alias = "network_id")]
+    pub network: Option<String>,
     pub user_address: String,
     pub recipient_address: String,
     #[serde(alias = "assetAddress")]

@@ -15,7 +15,9 @@ use crate::config::{ServiceConfig, load_public_params};
 use crate::exact::ExactService;
 use crate::exact::try_from_env as build_exact_service;
 use crate::issuer::{GuaranteeIssuer, LiveGuaranteeIssuer};
-use crate::server::state::{AppState, CoreTabService, FourMicaHandler, TabService};
+use crate::server::state::{
+    AppState, CoreTabService, FourMicaHandler, NetworkTabService, TabService,
+};
 use crate::verifier::{CertificateValidator, CertificateVerifier};
 
 #[tokio::main]
@@ -28,7 +30,8 @@ async fn main() -> anyhow::Result<()> {
     let service_cfg =
         ServiceConfig::from_env().context("failed to load facilitator configuration")?;
     let mut four_mica_handlers = Vec::new();
-    let mut first_network_auth: Option<Arc<AuthSession>> = None;
+    let mut tab_services = Vec::new();
+    let mut default_tab_network = None;
     for (idx, network) in service_cfg.networks.iter().enumerate() {
         let auth_session = match &network.auth {
             Some(auth_cfg) => Some(Arc::new(
@@ -47,7 +50,7 @@ async fn main() -> anyhow::Result<()> {
             None => None,
         };
         if idx == 0 {
-            first_network_auth = auth_session.clone();
+            default_tab_network = Some(network.id.clone());
         }
 
         let public_params = load_public_params(&network.core_api_base_url)
@@ -64,13 +67,13 @@ async fn main() -> anyhow::Result<()> {
             public_params.guarantee_domain,
         )) as Arc<dyn CertificateValidator>;
         let issuer = Arc::new(
-            LiveGuaranteeIssuer::try_new(network.core_api_base_url.clone(), auth_session)
+            LiveGuaranteeIssuer::try_new(network.core_api_base_url.clone(), auth_session.clone())
                 .with_context(|| {
-                    format!(
-                        "failed to initialize 4mica guarantee issuer for network {}",
-                        network.id
-                    )
-                })?,
+                format!(
+                    "failed to initialize 4mica guarantee issuer for network {}",
+                    network.id
+                )
+            })?,
         ) as Arc<dyn GuaranteeIssuer>;
 
         four_mica_handlers.push(FourMicaHandler::new(
@@ -79,19 +82,26 @@ async fn main() -> anyhow::Result<()> {
             verifier,
             issuer,
         ));
-    }
 
-    let tab_service: Option<Arc<dyn TabService>> = service_cfg.networks.first().map(|network| {
-        Arc::new(CoreTabService::new(
+        let tab_service = Arc::new(CoreTabService::new(
             network.core_api_base_url.clone(),
             service_cfg.asset_address.clone(),
-            first_network_auth.clone(),
-        )) as Arc<dyn TabService>
-    });
+            auth_session.clone(),
+        )) as Arc<dyn TabService>;
+        tab_services.push(NetworkTabService {
+            network: network.id.clone(),
+            service: tab_service,
+        });
+    }
 
     let exact_service: Option<Arc<dyn ExactService>> = build_exact_service().await?;
 
-    let state = AppState::new(four_mica_handlers, tab_service, exact_service);
+    let state = AppState::new(
+        four_mica_handlers,
+        tab_services,
+        default_tab_network,
+        exact_service,
+    );
 
     server::run(service_cfg, state).await
 }

@@ -20,7 +20,7 @@ const ENV_GUARANTEE_DOMAIN_VARIANTS: [&str; 3] = [
     "FOUR_MICA_GUARANTEE_DOMAIN",
     "4MICA_GUARANTEE_DOMAIN",
 ];
-const DEFAULT_NETWORK_ID: &str = "sepolia-mainnet";
+const DEFAULT_NETWORK_ID: &str = "eip155:11155111";
 const DEFAULT_AUTH_REFRESH_MARGIN_SECS: u64 = 60;
 
 #[derive(Clone)]
@@ -104,6 +104,9 @@ fn load_networks_from_env() -> Result<Vec<NetworkConfig>> {
     }
 
     let network = std::env::var(ENV_NETWORK).unwrap_or_else(|_| DEFAULT_NETWORK_ID.into());
+    validate_caip2_network(&network).with_context(|| {
+        format!("{ENV_NETWORK} must be a CAIP-2 identifier like \"eip155:11155111\"")
+    })?;
     let api_url = std::env::var(ENV_CORE_API_URL).unwrap_or_else(|_| DEFAULT_CORE_API_URL.into());
     let api_base_url = normalize_url(&api_url)?;
     let auth = resolve_auth_config(None, None, None, &auth_fallback, &api_base_url, &network)?;
@@ -119,7 +122,7 @@ fn parse_network_list(raw: &str, auth_fallback: &AuthFallback) -> Result<Vec<Net
     let entries: Vec<NetworkEnvConfig> = serde_json::from_str(raw).with_context(|| {
         format!(
             "{ENV_NETWORKS} must be JSON like \
-        '[{{\"network\":\"sepolia-mainnet\",\"coreApiUrl\":\"https://api.4mica.xyz/\"}}]'"
+        '[{{\"network\":\"eip155:11155111\",\"coreApiUrl\":\"https://api.4mica.xyz/\"}}]'"
         )
     })?;
     if entries.is_empty() {
@@ -132,6 +135,9 @@ fn parse_network_list(raw: &str, auth_fallback: &AuthFallback) -> Result<Vec<Net
         if network.is_empty() {
             bail!("{ENV_NETWORKS} entries require a non-empty `network` field");
         }
+        validate_caip2_network(network).with_context(|| {
+            format!("{ENV_NETWORKS} entry network must be CAIP-2 (e.g., \"eip155:11155111\")")
+        })?;
         let url = normalize_url(entry.core_api_url.trim())
             .with_context(|| format!("failed to parse coreApiUrl for network {}", entry.network))?;
         let auth = resolve_auth_config(
@@ -140,7 +146,7 @@ fn parse_network_list(raw: &str, auth_fallback: &AuthFallback) -> Result<Vec<Net
             entry.auth_refresh_margin_secs,
             auth_fallback,
             &url,
-            &entry.network,
+            network,
         )?;
         configs.push(NetworkConfig {
             id: network.to_owned(),
@@ -262,6 +268,34 @@ fn normalize_url(input: &str) -> Result<Url> {
     Ok(url)
 }
 
+pub fn validate_caip2_network(value: &str) -> Result<()> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        bail!("network must be a non-empty CAIP-2 identifier");
+    }
+
+    let mut parts = trimmed.split(':');
+    let namespace = parts.next().unwrap_or_default();
+    let reference = parts.next().unwrap_or_default();
+    if namespace.is_empty() || reference.is_empty() || parts.next().is_some() {
+        bail!("network must be in CAIP-2 format (namespace:reference)");
+    }
+    if !namespace
+        .chars()
+        .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit())
+    {
+        bail!("network namespace must be lowercase alphanumeric");
+    }
+    if !reference
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
+    {
+        bail!("network reference must be alphanumeric or one of '-', '_', '.'");
+    }
+
+    Ok(())
+}
+
 fn optional_asset_address_from_env() -> Option<String> {
     std::env::var(ENV_ASSET_ADDRESS)
         .ok()
@@ -317,13 +351,13 @@ mod tests {
         unsafe {
             env::set_var(
                 ENV_NETWORKS,
-                r#"[{"network":"alpha","coreApiUrl":"http://localhost:1234"}]"#,
+                r#"[{"network":"eip155:1","coreApiUrl":"http://localhost:1234"}]"#,
             );
         }
 
         let networks = load_networks_from_env().expect("networks parsed");
         assert_eq!(networks.len(), 1);
-        assert_eq!(networks[0].id, "alpha");
+        assert_eq!(networks[0].id, "eip155:1");
         assert_eq!(
             networks[0].core_api_base_url.as_str(),
             "http://localhost:1234/"
@@ -338,13 +372,13 @@ mod tests {
     fn falls_back_to_single_network_env() {
         clear_network_env();
         unsafe {
-            env::set_var(ENV_NETWORK, "beta");
+            env::set_var(ENV_NETWORK, "eip155:11155111");
             env::set_var(ENV_CORE_API_URL, "http://example.com");
         }
 
         let networks = load_networks_from_env().expect("networks parsed");
         assert_eq!(networks.len(), 1);
-        assert_eq!(networks[0].id, "beta");
+        assert_eq!(networks[0].id, "eip155:11155111");
         assert_eq!(
             networks[0].core_api_base_url.as_str(),
             "http://example.com/"
@@ -352,6 +386,40 @@ mod tests {
         assert!(networks[0].auth.is_none());
 
         clear_network_env();
+    }
+
+    #[test]
+    fn validate_caip2_network_accepts_examples() {
+        for value in [
+            "eip155:1",
+            "eip155:11155111",
+            "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1",
+            "cosmos:cosmoshub-4",
+        ] {
+            assert!(
+                validate_caip2_network(value).is_ok(),
+                "expected {value} to be valid"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_caip2_network_rejects_invalid_values() {
+        for value in [
+            "",
+            "sepolia-mainnet",
+            "eip155",
+            "eip155:",
+            ":11155111",
+            "eip155:1:2",
+            "EIP155:1",
+            "eip155:11 155111",
+        ] {
+            assert!(
+                validate_caip2_network(value).is_err(),
+                "expected {value} to be invalid"
+            );
+        }
     }
 
     #[test]

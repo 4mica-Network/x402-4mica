@@ -22,7 +22,10 @@ use super::model::{
     CreateTabRequest, CreateTabResponse, PaymentRequirements, SettleRequest, SettleResponse,
     SupportedKind, VerifyRequest, VerifyResponse, X402PaymentPayload,
 };
-use super::state::{AppState, FourMicaHandler, SharedState, TabError, TabService, ValidationError};
+use super::state::{
+    AppState, FourMicaHandler, NetworkTabService, SharedState, TabError, TabService,
+    ValidationError,
+};
 
 #[tokio::test]
 async fn verify_endpoint_accepts_valid_payload() {
@@ -167,7 +170,7 @@ async fn settle_endpoint_returns_certificate() {
     assert!(payload.success);
     assert!(payload.certificate.is_some());
     assert!(payload.tx_hash.is_none());
-    assert_eq!(payload.network_id.as_deref(), Some("sepolia-mainnet"));
+    assert_eq!(payload.network_id.as_deref(), Some("eip155:11155111"));
     assert_eq!(verifier.verify_calls(), 1);
     assert_eq!(issuer.issue_calls(), 1);
 }
@@ -196,7 +199,7 @@ async fn settle_accepts_payload_without_top_level_version() {
     assert!(payload.success);
     assert!(payload.certificate.is_some());
     assert!(payload.tx_hash.is_none());
-    assert_eq!(payload.network_id.as_deref(), Some("sepolia-mainnet"));
+    assert_eq!(payload.network_id.as_deref(), Some("eip155:11155111"));
     assert_eq!(verifier.verify_calls(), 1);
     assert_eq!(issuer.issue_calls(), 1);
 }
@@ -225,7 +228,7 @@ async fn settle_endpoint_accepts_v2_payload() {
     assert!(payload.success);
     assert!(payload.certificate.is_some());
     assert!(payload.tx_hash.is_none());
-    assert_eq!(payload.network_id.as_deref(), Some("sepolia-mainnet"));
+    assert_eq!(payload.network_id.as_deref(), Some("eip155:11155111"));
     assert_eq!(verifier.verify_calls(), 1);
     assert_eq!(issuer.issue_calls(), 1);
 }
@@ -255,7 +258,7 @@ async fn supported_endpoint_returns_configured_kind() {
     assert!(
         kinds
             .iter()
-            .any(|k| k["scheme"] == "4mica-credit" && k["network"] == "sepolia-mainnet")
+            .any(|k| k["scheme"] == "4mica-credit" && k["network"] == "eip155:11155111")
     );
 }
 
@@ -265,13 +268,14 @@ async fn supported_includes_exact_when_available() {
     let issuer = Arc::new(MockIssuer::success());
     let handler = FourMicaHandler::new(
         "4mica-credit".into(),
-        "sepolia-mainnet".into(),
+        "eip155:11155111".into(),
         verifier as Arc<dyn CertificateValidator>,
         issuer as Arc<dyn GuaranteeIssuer>,
     );
     let exact = Arc::new(MockExact::new());
     let state = AppState::new(
         vec![handler],
+        Vec::new(),
         None,
         Some(exact.clone() as Arc<dyn ExactService>),
     );
@@ -321,7 +325,7 @@ async fn supported_includes_v2_kind() {
     let payload: Value = serde_json::from_slice(&body).unwrap();
     let kinds = payload["kinds"].as_array().expect("kinds array");
     assert!(kinds.iter().any(|k| {
-        k["scheme"] == "4mica-credit" && k["network"] == "sepolia-mainnet" && k["x402Version"] == 2
+        k["scheme"] == "4mica-credit" && k["network"] == "eip155:11155111" && k["x402Version"] == 2
     }));
 }
 
@@ -363,12 +367,17 @@ async fn tabs_endpoint_returns_response_from_service() {
     let service = Arc::new(MockTabService::success(tab_response.clone()));
     let state = Arc::new(AppState::new(
         Vec::new(),
-        Some(service as Arc<dyn TabService>),
+        vec![NetworkTabService {
+            network: "eip155:11155111".into(),
+            service: service as Arc<dyn TabService>,
+        }],
+        Some("eip155:11155111".into()),
         None,
     ));
     let router = build_router(state);
 
     let request = CreateTabRequest {
+        network: None,
         user_address: "0xabc".into(),
         recipient_address: "0xdef".into(),
         erc20_token: Some("0xeee".into()),
@@ -387,10 +396,11 @@ async fn tabs_endpoint_returns_response_from_service() {
 
 #[tokio::test]
 async fn tabs_endpoint_returns_not_implemented_when_disabled() {
-    let state = Arc::new(AppState::new(Vec::new(), None, None));
+    let state = Arc::new(AppState::new(Vec::new(), Vec::new(), None, None));
     let router = build_router(state);
 
     let request = CreateTabRequest {
+        network: None,
         user_address: "0xabc".into(),
         recipient_address: "0xdef".into(),
         erc20_token: Some("0xeee".into()),
@@ -418,12 +428,17 @@ async fn tabs_endpoint_propagates_upstream_errors() {
     }));
     let state = Arc::new(AppState::new(
         Vec::new(),
-        Some(service as Arc<dyn TabService>),
+        vec![NetworkTabService {
+            network: "eip155:11155111".into(),
+            service: service as Arc<dyn TabService>,
+        }],
+        Some("eip155:11155111".into()),
         None,
     ));
     let router = build_router(state);
 
     let request = CreateTabRequest {
+        network: None,
         user_address: "0xabc".into(),
         recipient_address: "0xdef".into(),
         erc20_token: Some("0xeee".into()),
@@ -620,22 +635,27 @@ async fn settle_rejects_mismatched_versions() {
 fn test_state(verifier: Arc<MockVerifier>, issuer: Arc<MockIssuer>) -> SharedState {
     let handler = FourMicaHandler::new(
         "4mica-credit".into(),
-        "sepolia-mainnet".into(),
+        "eip155:11155111".into(),
         verifier.clone() as Arc<dyn CertificateValidator>,
         issuer.clone() as Arc<dyn GuaranteeIssuer>,
     );
-    Arc::new(AppState::new(vec![handler], None, None))
+    Arc::new(AppState::new(vec![handler], Vec::new(), None, None))
 }
 
 fn exact_state(exact: Arc<MockExact>) -> SharedState {
     let exact_service: Arc<dyn ExactService> = exact;
-    Arc::new(AppState::new(Vec::new(), None, Some(exact_service)))
+    Arc::new(AppState::new(
+        Vec::new(),
+        Vec::new(),
+        None,
+        Some(exact_service),
+    ))
 }
 
 fn sample_requirements() -> PaymentRequirements {
     PaymentRequirements {
         scheme: "4mica-credit".into(),
-        network: "sepolia-mainnet".into(),
+        network: "eip155:11155111".into(),
         max_amount_required: "10".into(),
         amount: None,
         resource: None,
@@ -655,7 +675,7 @@ fn sample_requirements() -> PaymentRequirements {
 fn sample_requirements_v2(amount: &str) -> PaymentRequirements {
     PaymentRequirements {
         scheme: "4mica-credit".into(),
-        network: "sepolia-mainnet".into(),
+        network: "eip155:11155111".into(),
         max_amount_required: "".into(),
         amount: Some(amount.into()),
         resource: None,
@@ -673,7 +693,7 @@ fn sample_requirements_v2(amount: &str) -> PaymentRequirements {
 }
 
 fn payment_payload_v1(amount: &str) -> X402PaymentPayload {
-    payment_payload_v1_with_scheme("4mica-credit", "sepolia-mainnet", amount)
+    payment_payload_v1_with_scheme("4mica-credit", "eip155:11155111", amount)
 }
 
 fn payment_payload_v1_with_scheme(scheme: &str, network: &str, amount: &str) -> X402PaymentPayload {
@@ -709,7 +729,7 @@ fn payment_payload_v2(amount: &str) -> X402PaymentPayload {
         "x402Version": 2,
         "accepted": {
             "scheme": "4mica-credit",
-            "network": "sepolia-mainnet",
+            "network": "eip155:11155111",
             "amount": amount,
             "payTo": recipient,
             "asset": asset
