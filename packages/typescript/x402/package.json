@@ -1,8 +1,17 @@
 {
   "name": "@4mica/x402",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
   "description": "TypeScript x402 utilities for interacting with the 4Mica payment network",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/4mica-Network/x402-4mica.git"
+  },
+  "homepage": "https://github.com/4mica-Network/x402-4mica#readme",
+  "bugs": {
+    "url": "https://github.com/4mica-Network/x402-4mica/issues"
+  },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
@@ -35,7 +44,7 @@
   "dependencies": {
     "@x402/core": "^2.2.0",
     "@x402/extensions": "^2.2.0",
-    "@4mica/sdk": "file:../../../../ts-sdk-4mica",
+    "@4mica/sdk": "^0.5.3",
     "viem": "^2.45.1"
   },
   "devDependencies": {
@@ -63,6 +72,5 @@
     "@x402/paywall": {
       "optional": true
     }
-  },
-  "license": "MIT"
+  }
 }
