@@ -39,7 +39,7 @@ interface TabConfig {
 function registerNetworkServers(httpServer: x402HTTPResourceServer, tabEndpoint: string) {
   const schemeServer = new FourMicaEvmScheme(tabEndpoint)
   SUPPORTED_NETWORKS.forEach((network) => {
-    ; (httpServer as any).ResourceServer.register(network, schemeServer)
+    ;(httpServer as any).ResourceServer.register(network, schemeServer)
   })
 }
 
@@ -124,7 +124,7 @@ export function paymentMiddlewareFromHTTPServer(
   ) {
     bazaarPromise = import('@x402/extensions/bazaar')
       .then(({ bazaarResourceServerExtension }) => {
-        ; (httpServer as any).ResourceServer.registerExtension(bazaarResourceServerExtension)
+        ;(httpServer as any).ResourceServer.registerExtension(bazaarResourceServerExtension)
       })
       .catch((err) => {
         console.error('Failed to load bazaar extension:', err)

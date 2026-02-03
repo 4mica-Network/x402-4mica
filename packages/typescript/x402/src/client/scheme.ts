@@ -1,4 +1,4 @@
-import { SchemeNetworkClient, PaymentRequirements, PaymentPayload } from '@x402/core/types'
+import { SchemeNetworkClient, PaymentRequirements, PaymentPayload, Network } from '@x402/core/types'
 import {
   Client,
   ConfigBuilder,
@@ -7,32 +7,64 @@ import {
   X402PaymentRequired,
 } from '@4mica/sdk'
 import { Account } from 'viem/accounts'
+import { SUPPORTED_NETWORKS } from '../server/scheme.js'
+
+const NETWORK_RPC_URLS: Record<Network, string> = {
+  'eip155:11155111': 'https://ethereum.sepolia.api.4mica.xyz',
+  'eip155:80002': 'https://api.4mica.xyz',
+}
 
 export class FourMicaEvmScheme implements SchemeNetworkClient {
   readonly scheme = '4mica-credit'
 
-  private readonly x402Flow: X402Flow
-
   private constructor(
     private readonly signer: Account,
-    client: Client
-  ) {
-    this.x402Flow = X402Flow.fromClient(client)
+    // rpcUrl -> x402Flow
+    private readonly x402Flows: Map<string, X402Flow>
+  ) {}
+
+  private static async createX402Flow(signer: Account, rpcUrl: string): Promise<X402Flow> {
+    const cfg = new ConfigBuilder().rpcUrl(rpcUrl).signer(signer).build()
+    const client = await Client.new(cfg)
+
+    return X402Flow.fromClient(client)
   }
 
-  static async create(signer: Account, client?: Client): Promise<FourMicaEvmScheme> {
-    if (client) return new FourMicaEvmScheme(signer, client)
+  static async create(signer: Account): Promise<FourMicaEvmScheme> {
+    const x402Flows = new Map<string, X402Flow>()
 
-    const cfg = new ConfigBuilder().rpcUrl('https://api.4mica.xyz').signer(signer).build()
-    return new FourMicaEvmScheme(signer, await Client.new(cfg))
+    for (const network of SUPPORTED_NETWORKS) {
+      const rpcUrl = NETWORK_RPC_URLS[network]
+      if (!rpcUrl) continue
+
+      x402Flows.set(rpcUrl, await FourMicaEvmScheme.createX402Flow(signer, rpcUrl))
+    }
+
+    return new FourMicaEvmScheme(signer, x402Flows)
   }
 
   async createPaymentPayload(
     x402Version: number,
     paymentRequirements: PaymentRequirements
   ): Promise<Pick<PaymentPayload, 'x402Version' | 'payload'>> {
+    const network = paymentRequirements.network as Network
+    if (!network) {
+      throw new Error('Network is required in PaymentRequirements')
+    }
+
+    const rpcUrl = (paymentRequirements.extra?.rpcUrl as string) ?? NETWORK_RPC_URLS[network]
+    if (!rpcUrl) {
+      throw new Error(`No RPC URL configured for network ${network}`)
+    }
+
+    let x402Flow = this.x402Flows.get(rpcUrl)
+    if (!x402Flow) {
+      x402Flow = await FourMicaEvmScheme.createX402Flow(this.signer, rpcUrl)
+      this.x402Flows.set(rpcUrl, x402Flow)
+    }
+
     if (x402Version === 1) {
-      const signed = await this.x402Flow.signPayment(
+      const signed = await x402Flow.signPayment(
         paymentRequirements as unknown as PaymentRequirementsV1,
         this.signer.address
       )
@@ -46,7 +78,7 @@ export class FourMicaEvmScheme implements SchemeNetworkClient {
         resource: { url: '', description: '', mimeType: '' },
         accepts: [paymentRequirements],
       }
-      const signed = await this.x402Flow.signPaymentV2(
+      const signed = await x402Flow.signPaymentV2(
         paymentRequired,
         paymentRequirements,
         this.signer.address

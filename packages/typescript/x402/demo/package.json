@@ -6,9 +6,11 @@
   "scripts": {
     "server": "tsx src/server.ts",
     "client": "tsx src/client.ts",
+    "deposit": "tsx src/deposit.ts",
     "dev": "tsx watch src/server.ts"
   },
   "dependencies": {
+    "@4mica/sdk": "file:../../../../../ts-sdk-4mica",
     "@4mica/x402": "file:..",
     "@x402/fetch": "^2.2.0",
     "dotenv": "^16.4.7",

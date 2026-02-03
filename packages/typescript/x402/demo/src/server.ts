@@ -7,7 +7,8 @@ app.use(express.json())
 
 const PORT = process.env.PORT || 3000
 const PAY_TO_ADDRESS = process.env.PAY_TO_ADDRESS
-const ADVERTISED_ENDPOINT = process.env.ADVERTISED_ENDPOINT || `http://localhost:${PORT}/tabs/open`
+const ADVERTISED_ENDPOINT =
+  process.env.ADVERTISED_ENDPOINT || `http://localhost:${PORT}/payment/tab`
 
 if (!PAY_TO_ADDRESS) {
   console.error('Error: PAY_TO_ADDRESS environment variable is required')

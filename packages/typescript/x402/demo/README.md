@@ -97,7 +97,7 @@ PRIVATE_KEY=0xYourPrivateKey yarn client
    Client → GET /api/premium-data
           ← 402 Payment Required (with payment requirements)
    
-   Client → POST /tabs/open (open payment tab)
+   Client → POST /payment/tab (open payment tab)
           ← 200 OK (tab details)
    
    Client → Signs payment guarantee (via 4mica SDK)
