@@ -1,0 +1,68 @@
+{
+  "name": "@4mica/x402",
+  "version": "0.0.0",
+  "type": "module",
+  "description": "TypeScript x402 utilities for interacting with the 4Mica payment network",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./server": {
+      "types": "./dist/server/index.d.ts",
+      "import": "./dist/server/index.js"
+    },
+    "./server/express": {
+      "types": "./dist/server/express/index.d.ts",
+      "import": "./dist/server/express/index.js"
+    },
+    "./client": {
+      "types": "./dist/client/index.d.ts",
+      "import": "./dist/client/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "lint": "eslint . --ext .ts",
+    "fmt": "prettier --check \"{src,tests}/**/*.{ts,js,json}\"",
+    "demo:server": "cd demo && yarn server",
+    "demo:client": "cd demo && yarn client",
+    "demo:dev": "cd demo && yarn dev"
+  },
+  "dependencies": {
+    "@x402/core": "^2.2.0",
+    "@x402/extensions": "^2.2.0",
+    "@4mica/sdk": "file:../../../../ts-sdk-4mica",
+    "viem": "^2.45.1"
+  },
+  "devDependencies": {
+    "@arethetypeswrong/cli": "^0.18.2",
+    "@eslint/js": "^9.39.2",
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.0.7",
+    "@typescript-eslint/eslint-plugin": "^8.48.1",
+    "@typescript-eslint/parser": "^8.48.1",
+    "eslint": "^9.39.2",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-react": "^7.37.5",
+    "express": "^5.2.1",
+    "globals": "^17.0.0",
+    "prettier": "^3.7.4",
+    "typescript": "^5.3.3",
+    "typescript-eslint": "^8.48.1",
+    "vitest": "^4.0.17"
+  },
+  "peerDependencies": {
+    "@x402/paywall": "^2.2.0",
+    "express": "^4.0.0 || ^5.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@x402/paywall": {
+      "optional": true
+    }
+  },
+  "license": "MIT"
+}
