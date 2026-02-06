@@ -1,7 +1,14 @@
+[workspace]
+resolver = "2"
+members = [".", "packages/rust/x402"]
+
+[workspace.package]
+edition = "2024"
+
 [package]
 name = "x402-4mica"
 version = "0.1.0"
-edition = "2024"
+edition.workspace = true
 
 [dependencies]
 anyhow = "1.0"
@@ -22,7 +29,10 @@ tokio = { version = "1.49.0", features = [
 tower-http = { version = "0.6.6", features = ["trace"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
-reqwest = { version = "0.13.1", default-features = false, features = ["json", "default-tls"] }
+reqwest = { version = "0.13.1", default-features = false, features = [
+    "json",
+    "default-tls",
+] }
 hex = "0.4"
 async-trait = "0.1"
 x402-rs = "0.12.5"

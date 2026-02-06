@@ -405,9 +405,9 @@ dependencies = [
 
 [[package]]
 name = "alloy-primitives"
-version = "1.5.2"
+version = "1.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f6a0fb18dd5fb43ec5f0f6a20be1ce0287c79825827de5744afaa6c957737c33"
+checksum = "3b88cf92ed20685979ed1d8472422f0c6c2d010cec77caf63aaa7669cc1a7bc2"
 dependencies = [
  "alloy-rlp",
  "bytes",
@@ -428,7 +428,6 @@ dependencies = [
  "rustc-hash",
  "serde",
  "sha3",
- "tiny-keccak",
 ]
 
 [[package]]
@@ -572,9 +571,9 @@ dependencies = [
 
 [[package]]
 name = "alloy-signer"
-version = "1.5.2"
+version = "1.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f7481dc8316768f042495eaf305d450c32defbc9bce09d8bf28afcd956895bb"
+checksum = "1bea4c8f30eddb11d7ab56e83e49c814655daa78ca708df26c300c10d0189cbc"
 dependencies = [
  "alloy-primitives",
  "async-trait",
@@ -805,9 +804,9 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.100"
+version = "1.0.101"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a23eb6b1614318a8071c9b2521f36b424b2c83db5eb3a0fead4a6c0809af6e61"
+checksum = "5f0e0fee31ef5ed1ba1316088939cea399010ed7731dba877ed44aeb407a75ea"
 
 [[package]]
 name = "arc-swap"
@@ -1853,6 +1852,18 @@ name = "crunchy"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
+
+[[package]]
+name = "crypto-4mica"
+version = "0.5.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "bls-signatures",
+ "blst",
+ "hex",
+ "serde",
+]
 
 [[package]]
 name = "crypto-4mica"
@@ -3297,9 +3308,9 @@ dependencies = [
 
 [[package]]
 name = "keccak-asm"
-version = "0.1.4"
+version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "505d1856a39b200489082f90d897c3f07c455563880bc5952e38eabf731c83b6"
+checksum = "b646a74e746cd25045aa0fd42f4f7f78aa6d119380182c7e63a5593c4ab8df6f"
 dependencies = [
  "digest 0.10.7",
  "sha3-asm",
@@ -4593,13 +4604,28 @@ dependencies = [
 [[package]]
 name = "rpc-4mica"
 version = "0.5.0"
+dependencies = [
+ "alloy-primitives",
+ "alloy-sol-types",
+ "anyhow",
+ "crypto-4mica 0.5.0",
+ "reqwest 0.13.1",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "url",
+]
+
+[[package]]
+name = "rpc-4mica"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "591e6fc326ebf57b50a3d4418b083d3832a0eccecdc46c17a27672d17b5b8553"
 dependencies = [
  "alloy-primitives",
  "alloy-sol-types",
  "anyhow",
- "crypto-4mica",
+ "crypto-4mica 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "reqwest 0.13.1",
  "serde",
  "serde_json",
@@ -4881,6 +4907,25 @@ checksum = "490dcfcbfef26be6800d11870ff2df8774fa6e86d047e3e8c8a76b25655e41ca"
 [[package]]
 name = "sdk-4mica"
 version = "0.5.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "crypto-4mica 0.5.0",
+ "log",
+ "reqwest 0.13.1",
+ "rpc-4mica 0.5.0",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "url",
+]
+
+[[package]]
+name = "sdk-4mica"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "25a8b1e2bea5c436f4a350ce0a6e3485cabc54f3d9a4464afe6a41107fe7ae68"
 dependencies = [
@@ -4888,10 +4933,10 @@ dependencies = [
  "anyhow",
  "async-trait",
  "base64 0.22.1",
- "crypto-4mica",
+ "crypto-4mica 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "log",
  "reqwest 0.13.1",
- "rpc-4mica",
+ "rpc-4mica 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -5200,9 +5245,9 @@ dependencies = [
 
 [[package]]
 name = "sha3-asm"
-version = "0.1.4"
+version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c28efc5e327c837aa837c59eae585fc250715ef939ac32881bcc11677cd02d46"
+checksum = "b31139435f327c93c6038ed350ae4588e2c70a13d50599509fee6349967ba35a"
 dependencies = [
  "cc",
  "cfg-if",
@@ -8447,12 +8492,12 @@ dependencies = [
  "async-trait",
  "axum",
  "base64 0.22.1",
- "crypto-4mica",
+ "crypto-4mica 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "dotenvy",
  "hex",
  "reqwest 0.13.1",
- "rpc-4mica",
- "sdk-4mica",
+ "rpc-4mica 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "sdk-4mica 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde",
  "serde_json",
  "serial_test",
@@ -8463,6 +8508,21 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "x402-rs",
+]
+
+[[package]]
+name = "x402-4mica-lib"
+version = "0.1.0"
+dependencies = [
+ "alloy-primitives",
+ "alloy-signer",
+ "anyhow",
+ "async-trait",
+ "parking_lot",
+ "sdk-4mica 0.5.0",
+ "serde",
+ "serde_json",
+ "x402-types",
 ]
 
 [[package]]
@@ -8525,6 +8585,23 @@ dependencies = [
  "tracing-opentelemetry",
  "tracing-subscriber",
  "url",
+]
+
+[[package]]
+name = "x402-types"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7ef907185c58618d3da87c886c347c607c5bde91938b8badb4de0b78db32101f"
+dependencies = [
+ "alloy-primitives",
+ "async-trait",
+ "base64 0.22.1",
+ "regex",
+ "rust_decimal",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
