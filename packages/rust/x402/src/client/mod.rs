@@ -8,9 +8,8 @@ use sdk_4mica::{
     Client, ConfigBuilder, X402Flow,
     x402::{X402PaymentRequiredV2, X402PaymentRequirements, X402ResourceInfo},
 };
+use x402_chain_eip155::chain::EIP155_NAMESPACE;
 use x402_types::{
-    chain::ChainId,
-    networks::NetworkInfo,
     proto::{PaymentRequired, v2::ResourceInfo},
     scheme::{
         X402SchemeId,
@@ -18,79 +17,10 @@ use x402_types::{
     },
 };
 
-use crate::model::VPaymentRequirements;
-use crate::{
-    chain::{
-        EIP155_NAMESPACE, ETHEREUM_SEPOLIA_CHAIN_REFERENCE, Eip155FourMica, FOUR_MICA_SCHEME,
-        POLYGON_AMOY_CHAIN_REFERENCE,
-    },
-    model::PaymentRequirementsExtra,
-};
+use crate::networks::{FOUR_MICA_SCHEME, NetworkRpcUrl};
+use model::{PaymentRequirementsExtra, VPaymentRequirements};
 
-#[derive(Debug, Clone)]
-struct NetworkRpcUrl {
-    network: NetworkInfo,
-    rpc_url: &'static str,
-    aliases: &'static [&'static str],
-}
-
-impl Into<ChainId> for NetworkRpcUrl {
-    fn into(self) -> ChainId {
-        ChainId::new(self.network.namespace, self.network.reference)
-    }
-}
-
-const NETWORK_RPC_URLS: &[NetworkRpcUrl] = &[
-    NetworkRpcUrl {
-        network: NetworkInfo {
-            name: "ethereum-sepolia",
-            namespace: EIP155_NAMESPACE,
-            reference: ETHEREUM_SEPOLIA_CHAIN_REFERENCE,
-        },
-        rpc_url: "https://ethereum.sepolia.api.4mica.xyz",
-        aliases: &["sepolia"],
-    },
-    NetworkRpcUrl {
-        network: NetworkInfo {
-            name: "polygon-amoy",
-            namespace: EIP155_NAMESPACE,
-            reference: POLYGON_AMOY_CHAIN_REFERENCE,
-        },
-        rpc_url: "https://api.4mica.xyz",
-        aliases: &["amoy"],
-    },
-];
-
-impl FromStr for NetworkRpcUrl {
-    type Err = anyhow::Error;
-
-    fn from_str(network: &str) -> Result<Self, Self::Err> {
-        let network_info = NETWORK_RPC_URLS
-            .iter()
-            .find(|n| {
-                let chain_id: ChainId = (**n).clone().into();
-                n.network.name == network
-                    || chain_id.to_string() == network
-                    || n.aliases.contains(&network)
-            })
-            .map(Clone::clone);
-        network_info.ok_or(anyhow::anyhow!("Unsupported network: {:?}", network))
-    }
-}
-
-impl TryFrom<&ChainId> for NetworkRpcUrl {
-    type Error = anyhow::Error;
-
-    fn try_from(chain: &ChainId) -> Result<Self, Self::Error> {
-        let network_info = NETWORK_RPC_URLS
-            .iter()
-            .find(|n| {
-                n.network.namespace == chain.namespace() && n.network.reference == chain.reference()
-            })
-            .map(Clone::clone);
-        network_info.ok_or(anyhow::anyhow!("Unsupported chain: {}", chain))
-    }
-}
+mod model;
 
 struct Inner<S> {
     signer: S,
@@ -116,11 +46,11 @@ impl<S> Eip155FourMicaClient<S> {
 
 impl<S> X402SchemeId for Eip155FourMicaClient<S> {
     fn namespace(&self) -> &str {
-        Eip155FourMica.namespace()
+        EIP155_NAMESPACE
     }
 
     fn scheme(&self) -> &str {
-        Eip155FourMica.scheme()
+        FOUR_MICA_SCHEME
     }
 }
 
