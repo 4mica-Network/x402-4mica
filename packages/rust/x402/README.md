@@ -17,14 +17,24 @@ This library provides both client and server implementations for integrating 4mi
 Add to your `Cargo.toml`:
 
 ```toml
+# Client only (default)
 x402-4mica = "0.1"
+
+# With server support
+x402-4mica = { version = "0.1", features = ["server"] }
 ```
+
+### Feature Flags
+
+- **`server`**: Enables server-side functionality including Axum middleware for protecting routes. When disabled, only the client module is available, reducing dependencies.
+
+The `client` module is always available. Server-specific dependencies (`axum`, `axum-core`, `tower`, `x402-axum`, `envconfig`) are only included when the `server` feature is enabled.
 
 ## Quick Start
 
 ### Server Example
 
-Protect your Axum routes with payment requirements:
+Protect your Axum routes with payment requirements (requires `server` feature):
 
 ```rust,no_run
 use alloy_primitives::{address, Address};
@@ -181,7 +191,7 @@ API_URL=http://localhost:3000
 ### Run the Server
 
 ```bash
-cargo run --example server
+cargo run --example server --features server
 ```
 
 The server will start on `http://localhost:3000` with:

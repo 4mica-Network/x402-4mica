@@ -10,29 +10,41 @@ readme = "README.md"
 keywords = ["4mica", "payments", "blockchain", "x402", "ethereum"]
 categories = ["x402", "cryptography::cryptocurrencies"]
 
+[features]
+default = []
+server = [
+    "dep:axum",
+    "dep:axum-core",
+    "dep:tower",
+    "dep:x402-axum",
+    "dep:envconfig",
+    "x402-chain-eip155/server",
+]
+
 [dependencies]
 anyhow.workspace = true
 async-trait.workspace = true
-axum.workspace = true
 reqwest = { workspace = true, features = ["json"] }
 rpc-4mica.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-tower.workspace = true
 
 sdk-4mica = { path = "../../../../4mica-core/sdk" }
 alloy-primitives = "1.5.4"
 alloy-signer = "1.6.1"
-axum-core = "0.5.6"
 http = "1.4.0"
 log = "0.4.29"
-parking_lot = "0.12.5"
 url = "2.5.8"
-x402-axum = "1.1.0"
-x402-chain-eip155 = { version = "1.1.0", features = ["server"] }
 x402-reqwest = "1.1.0"
 x402-types = "1.1.0"
-envconfig = "0.11.1"
+parking_lot = "0.12.5"
+x402-chain-eip155 = "1.1.0"
+
+axum = { workspace = true, optional = true }
+axum-core = { version = "0.5.6", optional = true }
+tower = { workspace = true, optional = true }
+x402-axum = { version = "1.1.0", optional = true }
+envconfig = { version = "0.11.1", optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
@@ -42,3 +54,7 @@ env_logger = "0.11.6"
 chrono = "0.4.39"
 rand = "0.8.5"
 alloy-signer-local = "1.6.1"
+
+[[example]]
+name = "server"
+required-features = ["server"]
