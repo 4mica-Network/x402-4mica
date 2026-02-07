@@ -49,6 +49,9 @@ use x402_types::networks::USDC;
 #[tokio::main]
 async fn main() {
     let x402 = X402Middleware::new("https://x402.4mica.xyz");
+    
+    // Creates middleware that handles payment tab creation endpoint
+    // Clients use this to open payment tabs before making payments
     let tab_middleware = x402.tab_middleware().unwrap();
 
     let app = Router::new()
