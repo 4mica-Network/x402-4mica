@@ -1,0 +1,4 @@
+interface:
+  display_name: "4Mica x402"
+  short_description: "Integrate 4Mica credit flow with x402"
+  default_prompt: "Use $fourmica-x402 to integrate 4Mica credit flow for an x402 client or resource server."
