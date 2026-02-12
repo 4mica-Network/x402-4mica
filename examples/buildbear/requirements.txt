@@ -1,0 +1,10 @@
+-e /Users/maironmahzoun/py-sdk-4mica
+fastapi>=0.110
+uvicorn[standard]>=0.25
+httpx>=0.25
+python-dotenv>=1.0
+eth-account>=0.10
+openai>=1.0
+langchain-openai>=0.2
+langchain-core>=0.2
+langgraph>=0.2
