@@ -326,3 +326,55 @@ impl From<AuthTokenResponse> for AuthTokens {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn parse_error_message_prefers_error() {
+        let message =
+            parse_error_message(json!({ "error": "invalid nonce" }).to_string().as_bytes());
+        assert_eq!(message, "invalid nonce");
+    }
+
+    #[test]
+    fn parse_error_message_uses_message_fallback() {
+        let message = parse_error_message(
+            json!({ "message": "signature invalid" })
+                .to_string()
+                .as_bytes(),
+        );
+        assert_eq!(message, "signature invalid");
+    }
+
+    #[test]
+    fn build_siwe_message_includes_critical_fields() {
+        let template = SiweTemplate {
+            domain: "api.4mica.xyz".into(),
+            uri: "https://api.4mica.xyz".into(),
+            chain_id: 11155111,
+            statement: "Sign this message".into(),
+            expiration: "2030-01-01T00:00:00Z".into(),
+            issued_at: "2026-01-01T00:00:00Z".into(),
+        };
+        let message = build_siwe_message(&template, "0xabc", "nonce-1");
+
+        assert!(message.contains("api.4mica.xyz wants you to sign in"));
+        assert!(message.contains("0xabc"));
+        assert!(message.contains("URI: https://api.4mica.xyz"));
+        assert!(message.contains("Chain ID: 11155111"));
+        assert!(message.contains("Nonce: nonce-1"));
+        assert!(message.contains("Expiration Time: 2030-01-01T00:00:00Z"));
+    }
+
+    #[test]
+    fn compute_expires_at_rejects_overflow() {
+        let err = compute_expires_at(u64::MAX).expect_err("should overflow");
+        assert!(
+            matches!(err, AuthError::Internal(_)),
+            "unexpected error: {err}"
+        );
+    }
+}

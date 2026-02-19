@@ -685,3 +685,101 @@ pub enum TabError {
     #[error("{message}")]
     Upstream { status: StatusCode, message: String },
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn payment_payload_v1() -> X402PaymentPayload {
+        serde_json::from_value(json!({
+            "x402Version": 1,
+            "scheme": "4mica-credit",
+            "network": "eip155:11155111",
+            "payload": {
+                "claims": {
+                    "version": "v1",
+                    "user_address": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                    "recipient_address": "0x1111111111111111111111111111111111111111",
+                    "tab_id": "0x1",
+                    "req_id": "0x0",
+                    "amount": "0xa",
+                    "asset_address": "0x2222222222222222222222222222222222222222",
+                    "timestamp": 1
+                },
+                "signature": "0x1111",
+                "scheme": "eip712"
+            }
+        }))
+        .expect("deserialize payload")
+    }
+
+    fn sample_requirements() -> PaymentRequirements {
+        PaymentRequirements {
+            scheme: "4mica-credit".into(),
+            network: "eip155:11155111".into(),
+            max_amount_required: "10".into(),
+            amount: None,
+            resource: None,
+            description: None,
+            mime_type: None,
+            output_schema: None,
+            pay_to: "0x1111111111111111111111111111111111111111".into(),
+            max_timeout_seconds: None,
+            asset: "0x2222222222222222222222222222222222222222".into(),
+            extra: None,
+        }
+    }
+
+    #[test]
+    fn resolve_x402_version_accepts_payload_version_when_absent() {
+        let payload = payment_payload_v1();
+        let version = resolve_x402_version(&payload, None).expect("version");
+        assert_eq!(version, 1);
+    }
+
+    #[test]
+    fn resolve_x402_version_rejects_mismatch() {
+        let payload = payment_payload_v1();
+        let err = resolve_x402_version(&payload, Some(2)).expect_err("expected mismatch");
+        assert!(
+            err.to_string()
+                .contains("does not match paymentPayload x402Version"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn required_amount_uses_max_amount_for_v1() {
+        let mut req = sample_requirements();
+        req.max_amount_required = "0x0a".into();
+        let amount = required_amount(&req, 1).expect("amount");
+        assert_eq!(amount, U256::from(10u8));
+    }
+
+    #[test]
+    fn required_amount_requires_amount_for_v2() {
+        let mut req = sample_requirements();
+        req.amount = None;
+        let err = required_amount(&req, 2).expect_err("expected missing amount");
+        assert!(
+            err.to_string()
+                .contains("amount is required for x402Version 2"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn required_amount_parses_decimal_for_v2() {
+        let mut req = sample_requirements();
+        req.amount = Some("12".into());
+        let amount = required_amount(&req, 2).expect("amount");
+        assert_eq!(amount, U256::from(12u8));
+    }
+
+    #[test]
+    fn parse_u256_field_rejects_empty_values() {
+        let err = parse_u256_field("", "amount").expect_err("expected empty value failure");
+        assert_eq!(err, "amount cannot be empty");
+    }
+}

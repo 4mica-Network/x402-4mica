@@ -1009,13 +1009,14 @@ struct MockIssuer {
     issue_calls: AtomicUsize,
 }
 
+fn dummy_cert() -> BLSCert {
+    crypto_4mica::bls::BLSCert::new(&[1u8; 32], vec![0u8]).expect("sign cert")
+}
+
 impl MockIssuer {
     fn success() -> Self {
         Self {
-            certificate: BLSCert {
-                claims: "00".into(),
-                signature: "11".into(),
-            },
+            certificate: dummy_cert(),
             fail: false,
             issue_calls: AtomicUsize::new(0),
         }
@@ -1023,10 +1024,7 @@ impl MockIssuer {
 
     fn failing() -> Self {
         Self {
-            certificate: BLSCert {
-                claims: "00".into(),
-                signature: "11".into(),
-            },
+            certificate: dummy_cert(),
             fail: true,
             issue_calls: AtomicUsize::new(0),
         }

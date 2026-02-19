@@ -96,3 +96,37 @@ pub(crate) fn parse_error_message(bytes: &[u8]) -> String {
         _ => "unknown error".to_string(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn parse_error_message_prefers_error_field() {
+        let message = parse_error_message(json!({ "error": "bad request" }).to_string().as_bytes());
+        assert_eq!(message, "bad request");
+    }
+
+    #[test]
+    fn parse_error_message_falls_back_to_message_field() {
+        let message = parse_error_message(
+            json!({ "message": "invalid signature" })
+                .to_string()
+                .as_bytes(),
+        );
+        assert_eq!(message, "invalid signature");
+    }
+
+    #[test]
+    fn parse_error_message_falls_back_to_text() {
+        let message = parse_error_message(b"plain text failure");
+        assert_eq!(message, "plain text failure");
+    }
+
+    #[test]
+    fn parse_error_message_handles_empty_body() {
+        let message = parse_error_message(&[]);
+        assert_eq!(message, "unknown error");
+    }
+}
