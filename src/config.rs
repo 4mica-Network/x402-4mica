@@ -430,4 +430,10 @@ mod tests {
             "unexpected error: {err}"
         );
     }
+
+    #[test]
+    fn normalize_url_appends_trailing_slash() {
+        let url = normalize_url("http://example.com").expect("normalize");
+        assert_eq!(url.as_str(), "http://example.com/");
+    }
 }

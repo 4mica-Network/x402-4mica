@@ -24,17 +24,14 @@ impl CertificateValidator for CertificateVerifier {
     fn verify_certificate(&self, cert: &BLSCert) -> Result<PaymentGuaranteeClaims, String> {
         let is_valid = cert
             .verify(&self.operator_public_key)
-            .map_err(|err: anyhow::Error| err.to_string())?;
-
+            .map_err(|err| err.to_string())?;
         if !is_valid {
             return Err("certificate signature mismatch".into());
         }
 
-        let claims_bytes = cert
-            .claims_bytes()
-            .map_err(|err: anyhow::Error| err.to_string())?;
+        let claims_bytes = cert.claims_bytes().map_err(|err| err.to_string())?;
         let claims = PaymentGuaranteeClaims::try_from(claims_bytes.as_slice())
-            .map_err(|err: anyhow::Error| err.to_string())?;
+            .map_err(|err| err.to_string())?;
 
         if let Some(expected_domain) = self.guarantee_domain.as_ref()
             && &claims.domain != expected_domain
@@ -55,7 +52,7 @@ impl CertificateValidator for CertificateVerifier {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crypto_4mica::bls::{BLSCert as RawCert, pub_key_from_scalar};
+    use crypto_4mica::bls::pub_key_from_scalar;
     use sdk_4mica::{PaymentGuaranteeClaims, U256};
 
     fn build_claims(domain: [u8; 32]) -> PaymentGuaranteeClaims {
@@ -76,16 +73,12 @@ mod tests {
     fn build_cert(domain: [u8; 32]) -> (BLSCert, [u8; 48]) {
         let claims = build_claims(domain);
         let secret = [1u8; 32];
-        let cert = RawCert::new(&secret, claims).expect("build cert");
-        let pubkey_vec = pub_key_from_scalar(&secret).expect("pubkey");
-        let pubkey: [u8; 48] = pubkey_vec.try_into().expect("48-byte key");
-        (
-            BLSCert {
-                claims: cert.claims,
-                signature: cert.signature,
-            },
-            pubkey,
-        )
+        let cert = crypto_4mica::bls::BLSCert::new(&secret, claims).expect("build cert");
+        let pubkey: [u8; 48] = pub_key_from_scalar(&secret)
+            .expect("derive public key")
+            .try_into()
+            .expect("48-byte key");
+        (cert, pubkey)
     }
 
     #[test]

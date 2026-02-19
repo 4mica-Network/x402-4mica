@@ -323,3 +323,56 @@ pub struct CoreCreateTabResponse {
     #[serde(alias = "nextReqId", alias = "reqId")]
     pub next_req_id: Option<U256>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn core_create_tab_response_deserializes_asset_and_next_req_aliases() {
+        let value = json!({
+            "id": "0x1",
+            "assetAddress": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "nextReqId": "0x2"
+        });
+
+        let decoded: CoreCreateTabResponse =
+            serde_json::from_value(value).expect("deserialize response");
+        assert_eq!(decoded.id, U256::from(1u8));
+        assert_eq!(
+            decoded.asset_address.as_deref(),
+            Some("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        );
+        assert_eq!(decoded.next_req_id, Some(U256::from(2u8)));
+    }
+
+    #[test]
+    fn core_create_tab_response_deserializes_legacy_req_id_alias() {
+        let value = json!({
+            "id": "0x1",
+            "erc20_token": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "reqId": "0x3"
+        });
+
+        let decoded: CoreCreateTabResponse =
+            serde_json::from_value(value).expect("deserialize response");
+        assert_eq!(
+            decoded.erc20_token.as_deref(),
+            Some("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+        );
+        assert_eq!(decoded.next_req_id, Some(U256::from(3u8)));
+    }
+
+    #[test]
+    fn certificate_response_from_bls_cert_preserves_hex_fields() {
+        let cert = BLSCert {
+            claims: "abcd".into(),
+            signature: "ef01".into(),
+        };
+
+        let response = CertificateResponse::from(cert);
+        assert_eq!(response.claims, "abcd");
+        assert_eq!(response.signature, "ef01");
+    }
+}

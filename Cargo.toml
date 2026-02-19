@@ -7,6 +7,7 @@ edition = "2024"
 anyhow = "1.0"
 rpc-4mica = { version = "0.5.0" }
 sdk-4mica = { version = "0.5.0" }
+crypto_4mica = { package = "crypto-4mica", version = "0.5.0" }
 axum = { version = "0.8.8", features = ["macros", "json"] }
 base64 = "0.22"
 dotenvy = "0.15"
@@ -31,4 +32,3 @@ alloy = "1.5.2"
 [dev-dependencies]
 tower = { version = "0.5.3", features = ["util"] }
 serial_test = "3.3.1"
-crypto_4mica = { package = "crypto-4mica", version = "0.5.0" }
