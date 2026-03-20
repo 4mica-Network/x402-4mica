@@ -63,7 +63,7 @@ print(resp.status_code, resp.text)
 
 ```bash
 python -m build
-pytest
+python -m pytest
 ```
 
 Install dev tools:

@@ -15,20 +15,26 @@ class StubSigned:
 
 
 class StubFlow:
+    def __init__(self):
+        self.last_payment_required = None
+        self.last_accepted = None
+
     async def sign_payment_v2(self, payment_required, accepted, user_address):
+        self.last_payment_required = payment_required
+        self.last_accepted = accepted
         return StubSigned({"claims": {"tab_id": "0x1"}, "v": 2})
 
     async def sign_payment(self, requirements, user_address):
         return StubSigned({"claims": {"tab_id": "0x2"}, "v": 1})
 
 
-class TestScheme(FourMicaEvmScheme):
+class StubScheme(FourMicaEvmScheme):
     async def _create_flow(self, rpc_url: str):
         return StubFlow()
 
 
 def test_create_payment_payload_v2():
-    scheme = TestScheme("0x" + "1" * 64)
+    scheme = StubScheme("0x" + "1" * 64)
     req = PaymentRequirements(
         scheme="4mica-credit",
         network="eip155:11155111",
@@ -36,15 +42,39 @@ def test_create_payment_payload_v2():
         amount="1",
         pay_to="0xdef",
         max_timeout_seconds=60,
-        extra={},
+        extra={
+            "rpcUrl": "https://custom.rpc.example",
+            "validationRegistryAddress": "0x3333333333333333333333333333333333333333",
+            "validationChainId": 11155111,
+            "validatorAddress": "0x4444444444444444444444444444444444444444",
+            "validatorAgentId": "7",
+            "minValidationScore": 80,
+            "requiredValidationTag": "hard-finality",
+            "resource": {
+                "url": "https://api.example.com/premium",
+                "description": "Premium dataset",
+                "mimeType": "application/json",
+            }
+        },
     )
     payload = scheme.create_payment_payload(req)
     assert payload["v"] == 2
     assert payload["claims"]["tab_id"] == "0x1"
+    flow = scheme._flows["https://custom.rpc.example"]
+    assert flow.last_payment_required.resource.url == "https://api.example.com/premium"
+    assert (
+        flow.last_payment_required.resource.description == "Premium dataset"
+    )
+    assert flow.last_accepted.extra["validationRegistryAddress"] == "0x3333333333333333333333333333333333333333"
+    assert flow.last_accepted.extra["validationChainId"] == 11155111
+    assert flow.last_accepted.extra["validatorAddress"] == "0x4444444444444444444444444444444444444444"
+    assert flow.last_accepted.extra["validatorAgentId"] == "7"
+    assert flow.last_accepted.extra["minValidationScore"] == 80
+    assert flow.last_accepted.extra["requiredValidationTag"] == "hard-finality"
 
 
 def test_create_payment_payload_v1():
-    scheme = TestScheme("0x" + "1" * 64)
+    scheme = StubScheme("0x" + "1" * 64)
     req = PaymentRequirementsV1(
         scheme="4mica-credit",
         network="eip155:11155111",
@@ -61,3 +91,19 @@ def test_create_payment_payload_v1():
     payload = scheme.create_payment_payload(req)
     assert payload["v"] == 1
     assert payload["claims"]["tab_id"] == "0x2"
+
+
+def test_create_payment_payload_v2_rejects_unknown_network_without_rpc():
+    scheme = StubScheme("0x" + "1" * 64)
+    req = PaymentRequirements(
+        scheme="4mica-credit",
+        network="eip155:1",
+        asset="0xabc",
+        amount="1",
+        pay_to="0xdef",
+        max_timeout_seconds=60,
+        extra={},
+    )
+
+    with pytest.raises(ValueError, match="No RPC URL configured"):
+        scheme.create_payment_payload(req)
