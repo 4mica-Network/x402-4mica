@@ -2,6 +2,7 @@ use std::net::SocketAddr;
 
 use anyhow::{Context, Result, bail};
 use reqwest::Url;
+use rpc::CorePublicParameters;
 use serde::Deserialize;
 
 const DEFAULT_CORE_API_URL: &str = "https://api.4mica.xyz/";
@@ -60,15 +61,16 @@ impl ServiceConfig {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub struct PublicParameters {
     pub operator_public_key: [u8; 48],
     pub guarantee_domain: Option<[u8; 32]>,
-}
-
-#[derive(Debug, Deserialize)]
-struct CorePublicParameters {
-    public_key: Vec<u8>,
+    pub active_guarantee_domain: Option<[u8; 32]>,
+    pub max_accepted_guarantee_version: u64,
+    pub accepted_guarantee_versions: Vec<u8>,
+    pub trusted_validation_registries: Vec<String>,
+    pub validation_hash_canonicalization_version: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -83,17 +85,33 @@ struct NetworkEnvConfig {
 
 pub async fn load_public_params(api_base: &Url) -> Result<PublicParameters> {
     let params = fetch_public_params(api_base).await?;
+    public_parameters_from_core(params)
+}
+
+fn public_parameters_from_core(params: CorePublicParameters) -> Result<PublicParameters> {
+    let accepted_guarantee_versions =
+        normalize_accepted_guarantee_versions(&params.accepted_guarantee_versions_or_default())?;
+    let active_guarantee_domain =
+        parse_optional_hex_array::<32>(&params.active_guarantee_domain_separator)
+            .context("invalid active_guarantee_domain_separator in core public params")?;
     let operator_public_key = params.public_key.try_into().map_err(|bytes: Vec<u8>| {
         anyhow::anyhow!("operator public key must be 48 bytes, got {}", bytes.len())
     })?;
 
-    let guarantee_domain = first_env_value(&ENV_GUARANTEE_DOMAIN_VARIANTS)
+    let configured_guarantee_domain = first_env_value(&ENV_GUARANTEE_DOMAIN_VARIANTS)
         .map(|value| parse_hex_array::<32>(&value))
         .transpose()?;
+    let guarantee_domain =
+        resolve_guarantee_domain(configured_guarantee_domain, active_guarantee_domain);
 
     Ok(PublicParameters {
         operator_public_key,
         guarantee_domain,
+        active_guarantee_domain,
+        max_accepted_guarantee_version: params.max_accepted_guarantee_version,
+        accepted_guarantee_versions,
+        trusted_validation_registries: params.trusted_validation_registries,
+        validation_hash_canonicalization_version: params.validation_hash_canonicalization_version,
     })
 }
 
@@ -324,11 +342,65 @@ fn parse_hex_array<const N: usize>(value: &str) -> Result<[u8; N]> {
     Ok(bytes)
 }
 
+fn parse_optional_hex_array<const N: usize>(value: &str) -> Result<Option<[u8; N]>> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    parse_hex_array::<N>(trimmed).map(Some)
+}
+
+fn normalize_accepted_guarantee_versions(raw_versions: &[u64]) -> Result<Vec<u8>> {
+    let mut accepted = Vec::new();
+    for version in raw_versions {
+        let version = u8::try_from(*version)
+            .map_err(|_| anyhow::anyhow!("unsupported guarantee version {version}"))?;
+        if matches!(version, 1 | 2) {
+            accepted.push(version);
+        }
+    }
+    accepted.sort_unstable();
+    accepted.dedup();
+
+    if accepted.is_empty() {
+        bail!("core public params did not expose any x402-compatible guarantee versions");
+    }
+
+    Ok(accepted)
+}
+
+fn resolve_guarantee_domain(
+    configured_guarantee_domain: Option<[u8; 32]>,
+    active_guarantee_domain: Option<[u8; 32]>,
+) -> Option<[u8; 32]> {
+    configured_guarantee_domain.or(active_guarantee_domain)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rpc::CorePublicParameters;
     use serial_test::serial;
     use std::env;
+
+    fn sample_core_params() -> CorePublicParameters {
+        CorePublicParameters {
+            public_key: vec![7u8; 48],
+            contract_address: "0x0000000000000000000000000000000000000001".into(),
+            ethereum_http_rpc_url: "https://rpc.example".into(),
+            eip712_name: "4mica".into(),
+            eip712_version: "1".into(),
+            chain_id: 11155111,
+            max_accepted_guarantee_version: 2,
+            accepted_guarantee_versions: vec![1, 2],
+            active_guarantee_domain_separator: format!("0x{}", "11".repeat(32)),
+            trusted_validation_registries: vec![
+                "0x0000000000000000000000000000000000000011".into(),
+            ],
+            validation_hash_canonicalization_version: "erc8004-validation-request-binding/v1"
+                .into(),
+        }
+    }
 
     fn clear_network_env() {
         unsafe {
@@ -435,5 +507,111 @@ mod tests {
     fn normalize_url_appends_trailing_slash() {
         let url = normalize_url("http://example.com").expect("normalize");
         assert_eq!(url.as_str(), "http://example.com/");
+    }
+
+    #[test]
+    fn normalize_accepted_guarantee_versions_filters_unknown_versions() {
+        let accepted =
+            normalize_accepted_guarantee_versions(&[2, 1, 3]).expect("accepted versions");
+        assert_eq!(accepted, vec![1, 2]);
+    }
+
+    #[test]
+    fn normalize_accepted_guarantee_versions_rejects_empty_compatible_set() {
+        let err = normalize_accepted_guarantee_versions(&[3]).unwrap_err();
+        assert!(
+            err.to_string().contains("x402-compatible"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn resolve_guarantee_domain_prefers_env_override() {
+        let resolved = resolve_guarantee_domain(Some([1u8; 32]), Some([2u8; 32]));
+        assert_eq!(resolved, Some([1u8; 32]));
+    }
+
+    #[test]
+    fn resolve_guarantee_domain_falls_back_to_active_domain() {
+        let resolved = resolve_guarantee_domain(None, Some([2u8; 32]));
+        assert_eq!(resolved, Some([2u8; 32]));
+    }
+
+    #[test]
+    fn resolve_guarantee_domain_allows_no_domain() {
+        let resolved = resolve_guarantee_domain(None, None);
+        assert_eq!(resolved, None);
+    }
+
+    #[test]
+    #[serial]
+    fn public_parameters_from_core_falls_back_to_default_accepted_versions() {
+        clear_network_env();
+        let mut params = sample_core_params();
+        params.accepted_guarantee_versions = Vec::new();
+
+        let public_params = public_parameters_from_core(params).expect("public params");
+        assert_eq!(public_params.accepted_guarantee_versions, vec![1, 2]);
+        assert_eq!(public_params.guarantee_domain, Some([0x11; 32]));
+    }
+
+    #[test]
+    #[serial]
+    fn public_parameters_from_core_rejects_invalid_active_domain() {
+        clear_network_env();
+        let mut params = sample_core_params();
+        params.active_guarantee_domain_separator = "0x1234".into();
+
+        let err = public_parameters_from_core(params).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("invalid active_guarantee_domain_separator"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn public_parameters_from_core_rejects_incompatible_versions() {
+        clear_network_env();
+        let mut params = sample_core_params();
+        params.accepted_guarantee_versions = vec![3];
+        params.max_accepted_guarantee_version = 3;
+
+        let err = public_parameters_from_core(params).unwrap_err();
+        assert!(
+            err.to_string().contains("x402-compatible"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn public_parameters_from_core_prefers_env_domain_over_active_domain() {
+        clear_network_env();
+        unsafe {
+            env::set_var(
+                ENV_GUARANTEE_DOMAIN_VARIANTS[0],
+                format!("0x{}", "22".repeat(32)),
+            );
+        }
+        let params = sample_core_params();
+
+        let public_params = public_parameters_from_core(params).expect("public params");
+        assert_eq!(public_params.active_guarantee_domain, Some([0x11; 32]));
+        assert_eq!(public_params.guarantee_domain, Some([0x22; 32]));
+
+        clear_network_env();
+    }
+
+    #[test]
+    #[serial]
+    fn public_parameters_from_core_uses_active_domain_when_no_override_is_set() {
+        clear_network_env();
+        let params = sample_core_params();
+
+        let public_params = public_parameters_from_core(params).expect("public params");
+        assert_eq!(public_params.active_guarantee_domain, Some([0x11; 32]));
+        assert_eq!(public_params.guarantee_domain, Some([0x11; 32]));
     }
 }

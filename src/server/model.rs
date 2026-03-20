@@ -1,8 +1,6 @@
 use std::collections::HashMap;
 
-use rpc::{
-    PaymentGuaranteeRequest, PaymentGuaranteeRequestClaims, PaymentGuaranteeRequestClaimsV1,
-};
+use rpc::PaymentGuaranteeRequest;
 use sdk_4mica::{BLSCert, U256};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -44,7 +42,7 @@ pub struct X402PaymentPayloadV1 {
     pub x402_version: X402Version<1>,
     pub scheme: String,
     pub network: String,
-    pub payload: PaymentGuaranteeRequestCompat,
+    pub payload: PaymentGuaranteeRequest,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -52,7 +50,7 @@ pub struct X402PaymentPayloadV1 {
 pub struct X402PaymentPayloadV2 {
     pub x402_version: X402Version<2>,
     pub accepted: PaymentRequirements,
-    pub payload: PaymentGuaranteeRequestCompat,
+    pub payload: PaymentGuaranteeRequest,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -69,50 +67,6 @@ impl X402PaymentPayload {
             X402PaymentPayload::V1(_) => 1,
             X402PaymentPayload::V2(_) => 2,
         }
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct PaymentGuaranteeRequestCompat {
-    pub claims: PaymentGuaranteeRequestClaimsCompat,
-    pub signature: String,
-    pub scheme: rpc::SigningScheme,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case", tag = "version")]
-pub enum PaymentGuaranteeRequestClaimsCompat {
-    V1(PaymentGuaranteeRequestClaimsV1Compat),
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct PaymentGuaranteeRequestClaimsV1Compat {
-    pub user_address: String,
-    pub recipient_address: String,
-    pub tab_id: U256,
-    #[serde(alias = "reqId")]
-    pub req_id: U256,
-    pub amount: U256,
-    pub asset_address: String,
-    pub timestamp: u64,
-}
-
-impl PaymentGuaranteeRequestCompat {
-    pub fn into_request(self) -> PaymentGuaranteeRequest {
-        let claims = match self.claims {
-            PaymentGuaranteeRequestClaimsCompat::V1(claims) => {
-                PaymentGuaranteeRequestClaims::V1(PaymentGuaranteeRequestClaimsV1 {
-                    user_address: claims.user_address,
-                    recipient_address: claims.recipient_address,
-                    tab_id: claims.tab_id,
-                    req_id: claims.req_id,
-                    amount: claims.amount,
-                    asset_address: claims.asset_address,
-                    timestamp: claims.timestamp,
-                })
-            }
-        };
-        PaymentGuaranteeRequest::new(claims, self.signature, self.scheme)
     }
 }
 
@@ -249,8 +203,8 @@ pub struct CertificateResponse {
 impl From<BLSCert> for CertificateResponse {
     fn from(cert: BLSCert) -> Self {
         Self {
-            claims: cert.claims,
-            signature: cert.signature,
+            claims: format!("0x{}", cert.claims().to_hex()),
+            signature: format!("0x{}", cert.signature().to_hex()),
         }
     }
 }
@@ -327,6 +281,7 @@ pub struct CoreCreateTabResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crypto_4mica::bls::KeyMaterial;
     use serde_json::json;
 
     #[test]
@@ -366,13 +321,11 @@ mod tests {
 
     #[test]
     fn certificate_response_from_bls_cert_preserves_hex_fields() {
-        let cert = BLSCert {
-            claims: "abcd".into(),
-            signature: "ef01".into(),
-        };
+        let key = KeyMaterial::from_bytes(&[7u8; 32]).expect("secret key");
+        let cert = BLSCert::sign(&key, vec![0xab, 0xcd].into()).expect("sign cert");
 
         let response = CertificateResponse::from(cert);
-        assert_eq!(response.claims, "abcd");
-        assert_eq!(response.signature, "ef01");
+        assert_eq!(response.claims, "0xabcd");
+        assert!(response.signature.starts_with("0x"));
     }
 }

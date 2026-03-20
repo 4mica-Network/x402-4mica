@@ -1856,16 +1856,16 @@ checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
 
 [[package]]
 name = "crypto-4mica"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e4be8493f152e59d3d7ad586dc34ec9578f8e4aad8360b42e65debfffdaf8351"
+version = "0.6.0"
 dependencies = [
  "alloy",
  "anyhow",
  "bls-signatures",
  "blst",
  "hex",
+ "secrecy",
  "serde",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -4592,9 +4592,7 @@ dependencies = [
 
 [[package]]
 name = "rpc-4mica"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "591e6fc326ebf57b50a3d4418b083d3832a0eccecdc46c17a27672d17b5b8553"
+version = "0.6.0"
 dependencies = [
  "alloy-primitives",
  "alloy-sol-types",
@@ -4880,9 +4878,7 @@ checksum = "490dcfcbfef26be6800d11870ff2df8774fa6e86d047e3e8c8a76b25655e41ca"
 
 [[package]]
 name = "sdk-4mica"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "25a8b1e2bea5c436f4a350ce0a6e3485cabc54f3d9a4464afe6a41107fe7ae68"
+version = "0.6.0"
 dependencies = [
  "alloy",
  "anyhow",
@@ -4897,6 +4893,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "url",
+ "zeroize",
 ]
 
 [[package]]
@@ -4939,6 +4936,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d4387882333d3aa8cb20530a17c69a3752e97837832f34f6dccc760e715001d9"
 dependencies = [
  "cc",
+]
+
+[[package]]
+name = "secrecy"
+version = "0.10.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e891af845473308773346dc847b2c23ee78fe442e0472ac50e22a18a93d3ae5a"
+dependencies = [
+ "zeroize",
 ]
 
 [[package]]

@@ -134,13 +134,64 @@ examples/python_client/requirements.txt`). A TypeScript version lives in `exampl
 }
 ```
 
+### Payment payload schema (v2)
+
+This repository follows the V2 schema implemented in the checked-out upstream codebases
+(`4mica-core`, `sdk-4mica`, `ts-sdk-4mica`, `py-sdk-4mica`). In particular, the current
+implementation still requires `validationChainId` / `validation_chain_id` as part of the V2
+validation policy. If another planning document omits that field, treat the code as the source of
+truth for this repository until all repos are updated together.
+
+`paymentPayload` for x402 V2 uses the `accepted` envelope shape:
+
+```json
+{
+  "x402Version": 2,
+  "accepted": {
+    "scheme": "4mica-credit",
+    "network": "eip155:80002",
+    "amount": "<decimal or 0x value>",
+    "payTo": "<0x-prefixed checksum string>",
+    "asset": "<0x-prefixed checksum string>"
+  },
+  "payload": {
+    "claims": {
+      "version": "v2",
+      "user_address": "<0x-prefixed checksum string>",
+      "recipient_address": "<0x-prefixed checksum string>",
+      "tab_id": "<decimal or 0x value>",
+      "req_id": "<decimal or 0x value>",
+      "amount": "<decimal or 0x value>",
+      "asset_address": "<0x-prefixed checksum string>",
+      "timestamp": 1716500000,
+      "validation_registry_address": "<0x-prefixed checksum string>",
+      "validation_request_hash": "<0x-prefixed 32-byte hex string>",
+      "validation_chain_id": 80002,
+      "validator_address": "<0x-prefixed checksum string>",
+      "validator_agent_id": "<decimal or 0x value>",
+      "min_validation_score": 80,
+      "validation_subject_hash": "<0x-prefixed 32-byte hex string>",
+      "required_validation_tag": "hard-finality"
+    },
+    "signature": "<0x-prefixed wallet signature>",
+    "scheme": "eip712"
+  }
+}
+```
+
 The facilitator enforces that:
 
 - `scheme` / `network` match both `/supported` and the resource server’s requirements.
 - `payTo` equals the `recipient_address` present inside the claim.
-- `asset` and `maxAmountRequired` must match the signed `amount` exactly (no partial spends).
-- If `X402_GUARANTEE_DOMAIN` is set (legacy `FOUR_MICA_GUARANTEE_DOMAIN` / `4MICA_GUARANTEE_DOMAIN`
-  are also honored), the certificate domain returned by core matches it exactly.
+- `asset` must match the signed `amount` claim's asset exactly.
+- For V1, `maxAmountRequired` must match the signed `amount` exactly.
+- For V2, `amount` must match the signed `amount` exactly.
+- For V2, `paymentRequirements.extra` must include the validation policy fields expected by the
+  SDKs and facilitator: `validationRegistryAddress`, `validationChainId`, `validatorAddress`,
+  `validatorAgentId`, `minValidationScore`, and optional `requiredValidationTag`.
+- By default, the facilitator verifies certificates against the active guarantee domain advertised
+  by core. If `X402_GUARANTEE_DOMAIN` is set (legacy `FOUR_MICA_GUARANTEE_DOMAIN` /
+  `4MICA_GUARANTEE_DOMAIN` are also honored), that value overrides the core-provided domain.
 
 ### HTTP API
 
@@ -158,7 +209,7 @@ The facilitator enforces that:
     their wallet; the facilitator reuses the existing tab for that pair whenever possible.
     `nextReqId` is the next sequential request id to include when signing a guarantee.
 - `POST /verify`
-  - Request: `{ "x402Version": 1, "paymentPayload": { ... }, "paymentRequirements": { ... } }`.
+  - Request: `{ "x402Version": 1|2, "paymentPayload": { ... }, "paymentRequirements": { ... } }`.
   - Response: `{ "isValid": true|false, "invalidReason"?, "certificate": null }`.
 - `POST /settle`
   - Request: same shape as `/verify`.
@@ -183,7 +234,7 @@ x402-4mica and the 4mica core service.
      `{ userAddress, erc20Token?, ttlSeconds? }`.
    - Recipient → Facilitator: `POST /tabs` using the supplied body. The facilitator will reuse the
      existing tab for that `(user, recipient, asset)` combination or create a fresh one.
-   - Facilitator → 4mica core: `POST core/tabs` whenever a new tab is required.
+   - Facilitator → 4mica core: `POST core/payment-tabs` whenever a new tab is required.
    - Facilitator → Recipient: `{ tabId, userAddress, recipientAddress, assetAddress, startTimestamp, ttlSeconds, nextReqId }`.
      Recipients cache this tab and reuse it until expiry, then hand `tabId`/`userAddress` back to
      the client inside `paymentRequirements` along with the latest `nextReqId`.
@@ -197,8 +248,9 @@ x402-4mica and the 4mica core service.
    - Recipient → Facilitator: `POST /verify` with
      `{ x402Version, paymentPayload, paymentRequirements }`.
    - Facilitator: validates the payment payload, ensures `scheme`/`network` match `/supported`,
-     confirms the claims reference the advertised tab, user, asset, `payTo`, and that `amount`
-     exactly equals `maxAmountRequired`.
+     confirms the claims reference the advertised tab, user, asset, and `payTo`, and enforces the
+     version-specific amount field:
+     `maxAmountRequired` for V1, `amount` for V2.
    - Facilitator → Recipient: `{ isValid, invalidReason?, certificate: null }`. No request touches
      4mica core here; this is purely structural validation so recipients can pre-flight calls.
 6. **Recipient settles the tab**
@@ -406,10 +458,10 @@ keeping custody, settlement, and tab management under your own infrastructure.
 
 - **Startup** – the process loads configuration from the environment, then calls
   `X402_CORE_API_URL/core/public-params` (or the first `coreApiUrl` listed inside `X402_NETWORKS`) to
-  fetch the operator’s BLS public key, domain separator, and API base URL. Those values are kept in
-  memory and reused for all later requests.
+  fetch the operator’s BLS public key, active guarantee domain, accepted guarantee versions, and
+  related metadata. Those values are kept in memory and reused for later requests.
 - **Tab provisioning (`POST /tabs`)** – recipients can ask the facilitator to open a payment tab on
-  their behalf. The facilitator relays the request to `core/tabs`, converts the 4mica
+  their behalf. The facilitator relays the request to `core/payment-tabs`, converts the 4mica
   response into a plain JSON payload, and hands the tab metadata back to the resource server.
 - **Verification (`POST /verify`)** – recipients send the `paymentPayload` plus the
   `paymentRequirements` they issued to the client. The facilitator validates the claims against the

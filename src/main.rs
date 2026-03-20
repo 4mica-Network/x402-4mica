@@ -81,6 +81,7 @@ async fn main() -> anyhow::Result<()> {
             network.id.clone(),
             verifier,
             issuer,
+            public_params.accepted_guarantee_versions.clone(),
         ));
 
         let tab_service = Arc::new(CoreTabService::new(

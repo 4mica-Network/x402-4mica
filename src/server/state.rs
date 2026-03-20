@@ -9,10 +9,11 @@ use axum::http::StatusCode;
 use reqwest::{Client, Url};
 use rpc::{
     PaymentGuaranteeClaims, PaymentGuaranteeRequest, PaymentGuaranteeRequestClaims,
-    PaymentGuaranteeRequestClaimsV1,
+    PaymentGuaranteeRequestClaimsV1, PaymentGuaranteeRequestClaimsV2,
 };
 use sdk_4mica::{Address, U256};
 use serde::{Deserialize, Serialize};
+use serde_json::Map;
 use thiserror::Error;
 use tracing::error;
 
@@ -28,8 +29,6 @@ use crate::{
     exact::ExactService,
     issuer::{GuaranteeIssuer, parse_error_message},
 };
-
-const SUPPORTED_VERSIONS: [u8; 2] = [1, 2];
 
 pub(super) type SharedState = Arc<AppState>;
 
@@ -68,7 +67,11 @@ impl AppState {
     }
 
     pub fn validate_version(&self, version: u8) -> Result<(), ValidationError> {
-        if !SUPPORTED_VERSIONS.contains(&version) {
+        let four_mica_supports = self
+            .four_mica
+            .iter()
+            .any(|handler| handler.supports_version(version));
+        if !four_mica_supports && self.exact.is_none() {
             return Err(ValidationError::UnsupportedVersion(version));
         }
         Ok(())
@@ -83,9 +86,7 @@ impl AppState {
     pub async fn supported(&self) -> Vec<SupportedKind> {
         let mut kinds = Vec::new();
         for handler in &self.four_mica {
-            for version in SUPPORTED_VERSIONS {
-                kinds.push(handler.supported_kind(version));
-            }
+            kinds.extend(handler.supported_kinds());
         }
         if let Some(exact) = &self.exact {
             match exact.supported().await {
@@ -215,6 +216,7 @@ pub(crate) struct FourMicaHandler {
     network: String,
     verifier: Arc<dyn CertificateValidator>,
     issuer: Arc<dyn GuaranteeIssuer>,
+    supported_versions: Vec<u8>,
 }
 
 impl FourMicaHandler {
@@ -223,12 +225,14 @@ impl FourMicaHandler {
         network: String,
         verifier: Arc<dyn CertificateValidator>,
         issuer: Arc<dyn GuaranteeIssuer>,
+        supported_versions: Vec<u8>,
     ) -> Self {
         Self {
             scheme,
             network,
             verifier,
             issuer,
+            supported_versions,
         }
     }
 
@@ -240,12 +244,28 @@ impl FourMicaHandler {
         self.scheme == scheme && self.network == network
     }
 
-    fn supported_kind(&self, version: u8) -> SupportedKind {
-        SupportedKind {
-            scheme: self.scheme.clone(),
-            network: self.network.clone(),
-            x402_version: Some(version),
-            extra: None,
+    fn supports_version(&self, version: u8) -> bool {
+        self.supported_versions.contains(&version)
+    }
+
+    fn supported_kinds(&self) -> Vec<SupportedKind> {
+        self.supported_versions
+            .iter()
+            .copied()
+            .map(|version| SupportedKind {
+                scheme: self.scheme.clone(),
+                network: self.network.clone(),
+                x402_version: Some(version),
+                extra: None,
+            })
+            .collect()
+    }
+
+    fn ensure_version_supported(&self, version: u8) -> Result<(), ValidationError> {
+        if self.supports_version(version) {
+            Ok(())
+        } else {
+            Err(ValidationError::UnsupportedVersion(version))
         }
     }
 
@@ -254,6 +274,7 @@ impl FourMicaHandler {
         request: &VerifyRequest,
         x402_version: u8,
     ) -> Result<VerifyResponse, ValidationError> {
+        self.ensure_version_supported(x402_version)?;
         let payload = self.decode_payment_payload(
             request.payment_payload.clone(),
             &request.payment_requirements,
@@ -272,6 +293,7 @@ impl FourMicaHandler {
         request: &SettleRequest,
         x402_version: u8,
     ) -> Result<SettleResponse, ValidationError> {
+        self.ensure_version_supported(x402_version)?;
         let payload = self.decode_payment_payload(
             request.payment_payload.clone(),
             &request.payment_requirements,
@@ -292,6 +314,9 @@ impl FourMicaHandler {
         match &payload.claims {
             PaymentGuaranteeRequestClaims::V1(claims_request) => {
                 self.ensure_certificate_matches_claims_v1(claims_request, &claims)?;
+            }
+            PaymentGuaranteeRequestClaims::V2(claims_request) => {
+                self.ensure_certificate_matches_claims_v2(claims_request, &claims)?;
             }
         }
 
@@ -335,7 +360,7 @@ impl FourMicaHandler {
                     ));
                 }
 
-                Ok(envelope.payload.into_request())
+                Ok(envelope.payload)
             }
             X402PaymentPayload::V2(envelope) => {
                 if envelope.accepted.scheme != self.scheme {
@@ -358,7 +383,7 @@ impl FourMicaHandler {
                     ));
                 }
 
-                Ok(envelope.payload.into_request())
+                Ok(envelope.payload)
             }
         }
     }
@@ -378,6 +403,16 @@ impl FourMicaHandler {
                     "Decoded 4mica claims"
                 );
                 self.ensure_claims_v1_match_requirements(claims, reqs, version)?;
+            }
+            PaymentGuaranteeRequestClaims::V2(claims) => {
+                tracing::debug!(
+                    tab_id = format!("{:#x}", claims.tab_id),
+                    req_id = format!("{:#x}", claims.req_id),
+                    amount = format!("{:#x}", claims.amount),
+                    validation_request_hash = %claims.validation_policy.validation_request_hash,
+                    "Decoded 4mica V2 claims"
+                );
+                self.ensure_claims_v2_match_requirements(claims, reqs, version)?;
             }
         }
         Ok(())
@@ -452,6 +487,132 @@ impl FourMicaHandler {
                 "certificate values differ from requested claims".into(),
             ));
         }
+        Ok(())
+    }
+
+    fn ensure_claims_v2_match_requirements(
+        &self,
+        claims: &PaymentGuaranteeRequestClaimsV2,
+        reqs: &PaymentRequirements,
+        version: u8,
+    ) -> Result<(), ValidationError> {
+        claims
+            .validate()
+            .map_err(|err| ValidationError::InvalidClaims(err.to_string()))?;
+
+        let base = PaymentGuaranteeRequestClaimsV1 {
+            user_address: claims.user_address.clone(),
+            recipient_address: claims.recipient_address.clone(),
+            tab_id: claims.tab_id,
+            req_id: claims.req_id,
+            amount: claims.amount,
+            asset_address: claims.asset_address.clone(),
+            timestamp: claims.timestamp,
+        };
+        self.ensure_claims_v1_match_requirements(&base, reqs, version)?;
+
+        let reqs_extra = requirements_extra(reqs)?;
+        let validation_registry = parse_required_address_field(
+            reqs_extra,
+            "validationRegistryAddress",
+            "validation_registry_address",
+        )?;
+        if claims.validation_policy.validation_registry_address != validation_registry {
+            return Err(ValidationError::Mismatch(format!(
+                "validation registry {} does not match requirement {}",
+                claims.validation_policy.validation_registry_address, validation_registry
+            )));
+        }
+
+        let validation_chain_id =
+            parse_required_u64_field(reqs_extra, "validationChainId", "validation_chain_id")?;
+        if claims.validation_policy.validation_chain_id != validation_chain_id {
+            return Err(ValidationError::Mismatch(format!(
+                "validation chain id {} does not match requirement {}",
+                claims.validation_policy.validation_chain_id, validation_chain_id
+            )));
+        }
+
+        let expected_network_chain_id =
+            caip2_chain_id(&reqs.network).map_err(ValidationError::InvalidRequirements)?;
+        if validation_chain_id != expected_network_chain_id {
+            return Err(ValidationError::Mismatch(format!(
+                "validation chain id {} does not match payment network {}",
+                validation_chain_id, reqs.network
+            )));
+        }
+
+        let validator_address =
+            parse_required_address_field(reqs_extra, "validatorAddress", "validator_address")?;
+        if claims.validation_policy.validator_address != validator_address {
+            return Err(ValidationError::Mismatch(format!(
+                "validator address {} does not match requirement {}",
+                claims.validation_policy.validator_address, validator_address
+            )));
+        }
+
+        let validator_agent_id =
+            parse_required_u256_field(reqs_extra, "validatorAgentId", "validator_agent_id")?;
+        if claims.validation_policy.validator_agent_id != validator_agent_id {
+            return Err(ValidationError::Mismatch(format!(
+                "validator agent id {} does not match requirement {}",
+                claims.validation_policy.validator_agent_id, validator_agent_id
+            )));
+        }
+
+        let min_validation_score =
+            parse_required_u8_field(reqs_extra, "minValidationScore", "min_validation_score")?;
+        if claims.validation_policy.min_validation_score != min_validation_score {
+            return Err(ValidationError::Mismatch(format!(
+                "min validation score {} does not match requirement {}",
+                claims.validation_policy.min_validation_score, min_validation_score
+            )));
+        }
+
+        let required_validation_tag = parse_optional_string_field(
+            reqs_extra,
+            "requiredValidationTag",
+            "required_validation_tag",
+        )
+        .unwrap_or_default();
+        if claims.validation_policy.required_validation_tag != required_validation_tag {
+            return Err(ValidationError::Mismatch(format!(
+                "required validation tag '{}' does not match requirement '{}'",
+                claims.validation_policy.required_validation_tag, required_validation_tag
+            )));
+        }
+
+        Ok(())
+    }
+
+    fn ensure_certificate_matches_claims_v2(
+        &self,
+        request: &PaymentGuaranteeRequestClaimsV2,
+        issued: &PaymentGuaranteeClaims,
+    ) -> Result<(), ValidationError> {
+        self.ensure_certificate_matches_claims_v1(
+            &PaymentGuaranteeRequestClaimsV1 {
+                user_address: request.user_address.clone(),
+                recipient_address: request.recipient_address.clone(),
+                tab_id: request.tab_id,
+                req_id: request.req_id,
+                amount: request.amount,
+                asset_address: request.asset_address.clone(),
+                timestamp: request.timestamp,
+            },
+            issued,
+        )?;
+
+        let issued_policy = issued.validation_policy.as_ref().ok_or_else(|| {
+            ValidationError::Mismatch("issued certificate is missing V2 validation policy".into())
+        })?;
+
+        if issued_policy != &request.validation_policy {
+            return Err(ValidationError::Mismatch(
+                "certificate validation policy differs from requested claims".into(),
+            ));
+        }
+
         Ok(())
     }
 }
@@ -647,6 +808,107 @@ fn required_amount(reqs: &PaymentRequirements, version: u8) -> Result<U256, Vali
         }
         _ => Err(ValidationError::UnsupportedVersion(version)),
     }
+}
+
+fn requirements_extra(
+    reqs: &PaymentRequirements,
+) -> Result<&Map<String, serde_json::Value>, ValidationError> {
+    reqs.extra
+        .as_ref()
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| {
+            ValidationError::InvalidRequirements(
+                "extra is required and must be an object for x402Version 2".into(),
+            )
+        })
+}
+
+fn extra_value<'a>(
+    extra: &'a Map<String, serde_json::Value>,
+    camel: &str,
+    snake: &str,
+) -> Option<&'a serde_json::Value> {
+    extra.get(camel).or_else(|| extra.get(snake))
+}
+
+fn parse_required_address_field(
+    extra: &Map<String, serde_json::Value>,
+    camel: &str,
+    snake: &str,
+) -> Result<Address, ValidationError> {
+    let value = extra_value(extra, camel, snake)
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            ValidationError::InvalidRequirements(format!("{camel} is required for x402Version 2"))
+        })?;
+    Address::from_str(value)
+        .map_err(|_| ValidationError::InvalidRequirements(format!("invalid {camel} address")))
+}
+
+fn parse_required_u64_field(
+    extra: &Map<String, serde_json::Value>,
+    camel: &str,
+    snake: &str,
+) -> Result<u64, ValidationError> {
+    let value = extra_value(extra, camel, snake).ok_or_else(|| {
+        ValidationError::InvalidRequirements(format!("{camel} is required for x402Version 2"))
+    })?;
+    if let Some(number) = value.as_u64() {
+        return Ok(number);
+    }
+    let raw = value
+        .as_str()
+        .ok_or_else(|| ValidationError::InvalidRequirements(format!("invalid {camel}")))?;
+    raw.parse::<u64>()
+        .map_err(|_| ValidationError::InvalidRequirements(format!("invalid {camel}")))
+}
+
+fn parse_required_u8_field(
+    extra: &Map<String, serde_json::Value>,
+    camel: &str,
+    snake: &str,
+) -> Result<u8, ValidationError> {
+    let value = parse_required_u64_field(extra, camel, snake)?;
+    u8::try_from(value)
+        .map_err(|_| ValidationError::InvalidRequirements(format!("invalid {camel}")))
+}
+
+fn parse_required_u256_field(
+    extra: &Map<String, serde_json::Value>,
+    camel: &str,
+    snake: &str,
+) -> Result<U256, ValidationError> {
+    let value = extra_value(extra, camel, snake).ok_or_else(|| {
+        ValidationError::InvalidRequirements(format!("{camel} is required for x402Version 2"))
+    })?;
+    if let Some(raw) = value.as_str() {
+        return parse_u256_field(raw, camel).map_err(ValidationError::InvalidRequirements);
+    }
+    if let Some(number) = value.as_u64() {
+        return Ok(U256::from(number));
+    }
+    Err(ValidationError::InvalidRequirements(format!(
+        "invalid {camel}"
+    )))
+}
+
+fn parse_optional_string_field(
+    extra: &Map<String, serde_json::Value>,
+    camel: &str,
+    snake: &str,
+) -> Option<String> {
+    extra_value(extra, camel, snake)
+        .and_then(serde_json::Value::as_str)
+        .map(ToOwned::to_owned)
+}
+
+fn caip2_chain_id(network: &str) -> Result<u64, String> {
+    let (_, chain_id) = network
+        .split_once(':')
+        .ok_or_else(|| format!("invalid CAIP-2 network identifier: {network}"))?;
+    chain_id
+        .parse::<u64>()
+        .map_err(|_| format!("invalid CAIP-2 chain id in network {network}"))
 }
 
 #[derive(Debug, Error)]
