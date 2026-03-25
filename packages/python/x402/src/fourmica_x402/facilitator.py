@@ -75,6 +75,16 @@ def _requirements_to_payload(
     raise TypeError("payment_requirements must be a dict or pydantic model")
 
 
+def _model_to_payload(model: Any) -> Dict[str, Any]:
+    if hasattr(model, "model_dump"):
+        return model.model_dump(by_alias=True, exclude_none=True)
+    if hasattr(model, "dict"):
+        return model.dict(by_alias=True, exclude_none=True)
+    if isinstance(model, dict):
+        return model
+    raise TypeError("payload must be a dict or pydantic model")
+
+
 class FourMicaFacilitatorClient(HTTPFacilitatorClient):
     """Async 4mica facilitator client with open_tab helper."""
 
@@ -142,8 +152,8 @@ class FourMicaFacilitatorClient(HTTPFacilitatorClient):
     ) -> SettleResponse:
         request_body = self._build_request_body(
             payload.x402_version,
-            payload.model_dump(by_alias=True, exclude_none=True),
-            requirements.model_dump(by_alias=True, exclude_none=True),
+            _model_to_payload(payload),
+            _model_to_payload(requirements),
         )
         client = self._get_async_client()
         response = await client.post(
@@ -225,8 +235,8 @@ class FourMicaFacilitatorClientSync(HTTPFacilitatorClientSync):
     ) -> SettleResponse:
         request_body = self._build_request_body(
             payload.x402_version,
-            payload.model_dump(by_alias=True, exclude_none=True),
-            requirements.model_dump(by_alias=True, exclude_none=True),
+            _model_to_payload(payload),
+            _model_to_payload(requirements),
         )
         client = self._get_client()
         response = client.post(
@@ -241,21 +251,67 @@ class FourMicaFacilitatorClientSync(HTTPFacilitatorClientSync):
         return _normalize_settle_response(response.json(), requirements)
 
 
+def _attach_optional_fields(
+    response: SettleResponse,
+    payload: Dict[str, Any],
+) -> SettleResponse:
+    certificate = payload.get("certificate")
+    transaction = (
+        payload.get("transaction")
+        or payload.get("transactionHash")
+        or payload.get("txHash")
+        or payload.get("tx_hash")
+        or payload.get("hash")
+        or payload.get("requestId")
+        or payload.get("request_id")
+    )
+    tx_hash = payload.get("txHash") or payload.get("tx_hash")
+    network = (
+        payload.get("network")
+        or payload.get("networkId")
+        or payload.get("network_id")
+        or payload.get("chainId")
+        or payload.get("chain_id")
+    )
+    network_id = payload.get("networkId") or payload.get("network_id")
+    payer = payload.get("payer") or payload.get("userAddress") or payload.get("user_address")
+
+    for name, value in (
+        ("certificate", certificate),
+        ("transaction", transaction),
+        ("tx_hash", tx_hash),
+        ("txHash", tx_hash),
+        ("network", network),
+        ("network_id", network_id),
+        ("networkId", network_id),
+        ("payer", payer),
+    ):
+        if value is None:
+            continue
+        try:
+            setattr(response, name, value)
+        except Exception:
+            continue
+    return response
+
+
 def _normalize_settle_response(
     payload: Dict[str, Any],
     requirements: PaymentRequirements | PaymentRequirementsV1,
 ) -> SettleResponse:
     try:
-        return SettleResponse.model_validate(payload)
+        response = SettleResponse.model_validate(payload)
     except Exception:
         if not isinstance(payload, dict):
             raise
+    else:
+        return _attach_optional_fields(response, payload)
 
     tx = (
         payload.get("transaction")
         or payload.get("transactionHash")
         or payload.get("txHash")
-        or payload.get("tx")
+        or payload.get("tx_hash")
         or payload.get("hash")
         or payload.get("requestId")
         or payload.get("request_id")
@@ -263,6 +319,7 @@ def _normalize_settle_response(
     network = (
         payload.get("network")
         or payload.get("networkId")
+        or payload.get("network_id")
         or payload.get("chainId")
         or payload.get("chain_id")
         or str(requirements.network)
@@ -277,7 +334,7 @@ def _normalize_settle_response(
     payer = payload.get("payer") or payload.get("userAddress") or payload.get("user_address")
     success = bool(payload.get("success", error_reason is None))
 
-    return SettleResponse(
+    response = SettleResponse(
         success=success,
         error_reason=error_reason,
         error_message=error_message,
@@ -285,3 +342,4 @@ def _normalize_settle_response(
         transaction=str(tx or ""),
         network=str(network),
     )
+    return _attach_optional_fields(response, payload)

@@ -84,7 +84,7 @@ the BLS certificate to the recipient.
   run();
   ```
 
-- Rust SDK: `cargo add rust-sdk-4mica` and call
+- Rust SDK: `cargo add sdk-4mica` and call
   `X402Flow::sign_payment(requirements, user_address)` to obtain the same `payment.header` for the
   retry request.
 
@@ -97,7 +97,7 @@ the default `9000`). The mock resource will call the facilitator’s `/verify` e
 (for example decoded from an `X-PAYMENT` header).
 
 The bundled Rust example shows how to sign a payment
-header with `rust-sdk-4mica`:
+header with `sdk-4mica`:
 
 ```bash
 # requires PAYER_KEY, USER_ADDRESS, RESOURCE_URL and ASSET_ADDRESS
@@ -134,13 +134,66 @@ examples/python_client/requirements.txt`). A TypeScript version lives in `exampl
 }
 ```
 
+### Payment payload schema (v2)
+
+This repository follows the V2 schema implemented in the checked-out upstream codebases
+(`4mica-core`, `sdk-4mica`, `ts-sdk-4mica`, `py-sdk-4mica`), and the facilitator does not require
+`validationChainId` inside `paymentRequirements.extra`. The signed claim still carries
+`validation_chain_id`, and the facilitator derives the expected chain id from the CAIP-2 payment
+network during V2 validation.
+
+`paymentPayload` for x402 V2 uses the `accepted` envelope shape:
+
+```json
+{
+  "x402Version": 2,
+  "accepted": {
+    "scheme": "4mica-credit",
+    "network": "eip155:80002",
+    "amount": "<decimal or 0x value>",
+    "payTo": "<0x-prefixed checksum string>",
+    "asset": "<0x-prefixed checksum string>"
+  },
+  "payload": {
+    "claims": {
+      "version": "v2",
+      "user_address": "<0x-prefixed checksum string>",
+      "recipient_address": "<0x-prefixed checksum string>",
+      "tab_id": "<decimal or 0x value>",
+      "req_id": "<decimal or 0x value>",
+      "amount": "<decimal or 0x value>",
+      "asset_address": "<0x-prefixed checksum string>",
+      "timestamp": 1716500000,
+      "validation_registry_address": "<0x-prefixed checksum string>",
+      "validation_request_hash": "<0x-prefixed 32-byte hex string>",
+      "validation_chain_id": 80002,
+      "validator_address": "<0x-prefixed checksum string>",
+      "validator_agent_id": "<decimal or 0x value>",
+      "min_validation_score": 80,
+      "validation_subject_hash": "<0x-prefixed 32-byte hex string>",
+      "required_validation_tag": "hard-finality"
+    },
+    "signature": "<0x-prefixed wallet signature>",
+    "scheme": "eip712"
+  }
+}
+```
+
 The facilitator enforces that:
 
 - `scheme` / `network` match both `/supported` and the resource server’s requirements.
 - `payTo` equals the `recipient_address` present inside the claim.
-- `asset` and `maxAmountRequired` must match the signed `amount` exactly (no partial spends).
-- If `X402_GUARANTEE_DOMAIN` is set (legacy `FOUR_MICA_GUARANTEE_DOMAIN` / `4MICA_GUARANTEE_DOMAIN`
-  are also honored), the certificate domain returned by core matches it exactly.
+- `asset` must match the signed `amount` claim's asset exactly.
+- For V1, `maxAmountRequired` must match the signed `amount` exactly.
+- For V2, `amount` must match the signed `amount` exactly.
+- For V2, `paymentRequirements.extra` must include the validation policy fields expected by the
+  SDKs and facilitator: `validationRegistryAddress`, `validatorAddress`, `validatorAgentId`,
+  `minValidationScore`, and optional `requiredValidationTag`.
+- For V2, the signed `validation_chain_id` must match the CAIP-2 payment network, and the signed
+  validation registry must be present in core's `trusted_validation_registries`.
+- By default, the facilitator verifies certificates against the active guarantee domain advertised
+  by core. If `X402_GUARANTEE_DOMAIN` is set (legacy `FOUR_MICA_GUARANTEE_DOMAIN` /
+  `4MICA_GUARANTEE_DOMAIN` are also honored), that value overrides the core-provided domain.
 
 ### HTTP API
 
@@ -158,7 +211,7 @@ The facilitator enforces that:
     their wallet; the facilitator reuses the existing tab for that pair whenever possible.
     `nextReqId` is the next sequential request id to include when signing a guarantee.
 - `POST /verify`
-  - Request: `{ "x402Version": 1, "paymentPayload": { ... }, "paymentRequirements": { ... } }`.
+  - Request: `{ "x402Version": 1|2, "paymentPayload": { ... }, "paymentRequirements": { ... } }`.
   - Response: `{ "isValid": true|false, "invalidReason"?, "certificate": null }`.
 - `POST /settle`
   - Request: same shape as `/verify`.
@@ -183,7 +236,7 @@ x402-4mica and the 4mica core service.
      `{ userAddress, erc20Token?, ttlSeconds? }`.
    - Recipient → Facilitator: `POST /tabs` using the supplied body. The facilitator will reuse the
      existing tab for that `(user, recipient, asset)` combination or create a fresh one.
-   - Facilitator → 4mica core: `POST core/tabs` whenever a new tab is required.
+   - Facilitator → 4mica core: `POST core/payment-tabs` whenever a new tab is required.
    - Facilitator → Recipient: `{ tabId, userAddress, recipientAddress, assetAddress, startTimestamp, ttlSeconds, nextReqId }`.
      Recipients cache this tab and reuse it until expiry, then hand `tabId`/`userAddress` back to
      the client inside `paymentRequirements` along with the latest `nextReqId`.
@@ -197,8 +250,9 @@ x402-4mica and the 4mica core service.
    - Recipient → Facilitator: `POST /verify` with
      `{ x402Version, paymentPayload, paymentRequirements }`.
    - Facilitator: validates the payment payload, ensures `scheme`/`network` match `/supported`,
-     confirms the claims reference the advertised tab, user, asset, `payTo`, and that `amount`
-     exactly equals `maxAmountRequired`.
+     confirms the claims reference the advertised tab, user, asset, and `payTo`, and enforces the
+     version-specific amount field:
+     `maxAmountRequired` for V1, `amount` for V2.
    - Facilitator → Recipient: `{ isValid, invalidReason?, certificate: null }`. No request touches
      4mica core here; this is purely structural validation so recipients can pre-flight calls.
 6. **Recipient settles the tab**
@@ -260,50 +314,49 @@ The facilitator can transparently replace the EIP-3009/x402 debit flow. The key 
 
 ### Changes clients (payers) must make
 
-Payers sign guarantees instead of EIP-3009 transfers. Use the official SDK `rust-sdk-4mica` to manage collateral and produce signatures.
+Payers sign guarantees instead of EIP-3009 transfers. Use the official SDK `sdk-4mica` to manage collateral and produce signatures.
 
 1. **Install the SDK** – inside your agent crate run
 
    ```bash
-   cargo add rust-sdk-4mica
+   cargo add sdk-4mica
    ```
 
    or add the same entry manually to `Cargo.toml`.
 
 2. **Configure the client** – create a `Client` with the payer’s signing key. The SDK pulls the
-   remaining parameters (domain separator, operator key, etc.) from `X402_CORE_API_URL`.
+   remaining parameters (domain separator, operator key, etc.) from the configured core RPC URL.
 
    ```rust
+   use alloy::signers::local::PrivateKeySigner;
    use sdk_4mica::{Client, ConfigBuilder};
 
-   let config = ConfigBuilder::default()
-       .rpc_url("https://api.4mica.xyz/".into())
-       .wallet_private_key(std::env::var("PAYER_KEY")?)
-       .build()?;
+   let signer: PrivateKeySigner = std::env::var("PAYER_KEY")?.parse()?;
+   let config = ConfigBuilder::default().signer(signer).build()?;
    let client = Client::new(config).await?;
    ```
 
 3. **Fund the tab** – before requesting credit, ensure the payer has collateral using
    `client.user.deposit(...)` (or `approve_erc20` + `deposit` for tokens). Refer to the SDK README
    for concrete examples.
-4. **Sign guarantee claims** – derive `PaymentGuaranteeClaims` from the recipient’s
+4. **Sign guarantee claims** – derive `PaymentGuaranteeRequestClaims` from the recipient’s
    `paymentRequirements` (copy `tabId`, `userAddress`, `payTo`, `asset`, the desired `amount`, and
    the most recent `nextReqId`),
    choose a signing scheme (usually `SigningScheme::Eip712`), and call `client.user.sign_payment`.
 
    ```rust
-   use sdk_4mica::{PaymentGuaranteeClaims, SigningScheme, U256};
+   use sdk_4mica::{PaymentGuaranteeRequestClaims, SigningScheme, U256};
 
-   let claims = PaymentGuaranteeClaims {
-       user_address: payer_wallet.clone(),
-       recipient_address: pay_to.clone(),
-       tab_id: tab_id_u256,
+   let claims = PaymentGuaranteeRequestClaims::new(
+       payer_wallet.clone(),
+       pay_to.clone(),
+       tab_id_u256,
        // next_req_id should come from the /tabs response (nextReqId), parsed to U256.
-       req_id: next_req_id,
-       amount: U256::from(amount_wei),
-       asset_address: asset.clone(),
-       timestamp: chrono::Utc::now().timestamp() as u64,
-   };
+       next_req_id,
+       U256::from(amount_wei),
+       chrono::Utc::now().timestamp() as u64,
+       Some(asset.clone()),
+   );
    let signature = client
        .user
        .sign_payment(claims.clone(), SigningScheme::Eip712)
@@ -406,10 +459,10 @@ keeping custody, settlement, and tab management under your own infrastructure.
 
 - **Startup** – the process loads configuration from the environment, then calls
   `X402_CORE_API_URL/core/public-params` (or the first `coreApiUrl` listed inside `X402_NETWORKS`) to
-  fetch the operator’s BLS public key, domain separator, and API base URL. Those values are kept in
-  memory and reused for all later requests.
+  fetch the operator’s BLS public key, active guarantee domain, accepted guarantee versions, and
+  related metadata. Those values are kept in memory and reused for later requests.
 - **Tab provisioning (`POST /tabs`)** – recipients can ask the facilitator to open a payment tab on
-  their behalf. The facilitator relays the request to `core/tabs`, converts the 4mica
+  their behalf. The facilitator relays the request to `core/payment-tabs`, converts the 4mica
   response into a plain JSON payload, and hands the tab metadata back to the resource server.
 - **Verification (`POST /verify`)** – recipients send the `paymentPayload` plus the
   `paymentRequirements` they issued to the client. The facilitator validates the claims against the

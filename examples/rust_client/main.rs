@@ -1,11 +1,12 @@
 use std::env;
 use std::io::ErrorKind;
 
+use alloy::signers::local::PrivateKeySigner;
 use anyhow::{Context, Result};
 use dotenvy::from_filename;
 use reqwest::StatusCode;
 use rpc::PaymentGuaranteeRequestClaims as RpcPaymentGuaranteeRequestClaims;
-use sdk_4mica::{Client, ConfigBuilder, U256, X402Flow, x402::PaymentRequirements};
+use sdk_4mica::{ConfigBuilder, U256, X402Flow, x402::PaymentRequirements};
 use serde::Deserialize;
 
 fn load_env_files() {
@@ -80,11 +81,12 @@ async fn main() -> Result<()> {
         "3) Retry the resource with X-PAYMENT using the header below (server will handle verify/settle)\n"
     );
 
+    let signer: PrivateKeySigner = payer_key.parse().context("invalid payer private key")?;
     let config = ConfigBuilder::default()
-        .wallet_private_key(payer_key)
+        .signer(signer)
         .build()
         .context("invalid SDK config")?;
-    let core: Client = Client::new(config)
+    let core = sdk_4mica::Client::new(config)
         .await
         .context("failed to init 4mica core client")?;
 
@@ -126,6 +128,9 @@ async fn main() -> Result<()> {
 
     let (payment_asset, payment_tab_id, actual_amount) = match &payment.payload.claims {
         RpcPaymentGuaranteeRequestClaims::V1(claims) => {
+            (claims.asset_address.as_str(), claims.tab_id, claims.amount)
+        }
+        RpcPaymentGuaranteeRequestClaims::V2(claims) => {
             (claims.asset_address.as_str(), claims.tab_id, claims.amount)
         }
     };

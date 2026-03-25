@@ -1,5 +1,6 @@
 use std::fmt::Write;
 
+use crypto::bls::BlsPublicKey;
 use sdk_4mica::{BLSCert, PaymentGuaranteeClaims};
 
 pub trait CertificateValidator: Send + Sync {
@@ -7,14 +8,15 @@ pub trait CertificateValidator: Send + Sync {
 }
 
 pub struct CertificateVerifier {
-    operator_public_key: [u8; 48],
+    operator_public_key: BlsPublicKey,
     guarantee_domain: Option<[u8; 32]>,
 }
 
 impl CertificateVerifier {
     pub fn new(operator_public_key: [u8; 48], guarantee_domain: Option<[u8; 32]>) -> Self {
         Self {
-            operator_public_key,
+            operator_public_key: BlsPublicKey::from_bytes(&operator_public_key)
+                .expect("validated operator public key"),
             guarantee_domain,
         }
     }
@@ -22,15 +24,10 @@ impl CertificateVerifier {
 
 impl CertificateValidator for CertificateVerifier {
     fn verify_certificate(&self, cert: &BLSCert) -> Result<PaymentGuaranteeClaims, String> {
-        let is_valid = cert
-            .verify(&self.operator_public_key)
+        cert.verify(&self.operator_public_key)
             .map_err(|err| err.to_string())?;
-        if !is_valid {
-            return Err("certificate signature mismatch".into());
-        }
 
-        let claims_bytes = cert.claims_bytes().map_err(|err| err.to_string())?;
-        let claims = PaymentGuaranteeClaims::try_from(claims_bytes.as_slice())
+        let claims = PaymentGuaranteeClaims::try_from(cert.claims().as_bytes())
             .map_err(|err| err.to_string())?;
 
         if let Some(expected_domain) = self.guarantee_domain.as_ref()
@@ -52,7 +49,7 @@ impl CertificateValidator for CertificateVerifier {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crypto_4mica::bls::pub_key_from_scalar;
+    use crypto::bls::KeyMaterial;
     use sdk_4mica::{PaymentGuaranteeClaims, U256};
 
     fn build_claims(domain: [u8; 32]) -> PaymentGuaranteeClaims {
@@ -67,15 +64,19 @@ mod tests {
             asset_address: "0x0000000000000000000000000000000000000003".into(),
             timestamp: 123,
             version: 1,
+            validation_policy: None,
         }
     }
 
     fn build_cert(domain: [u8; 32]) -> (BLSCert, [u8; 48]) {
         let claims = build_claims(domain);
-        let secret = [1u8; 32];
-        let cert = crypto_4mica::bls::BLSCert::new(&secret, claims).expect("build cert");
-        let pubkey: [u8; 48] = pub_key_from_scalar(&secret)
-            .expect("derive public key")
+        let claims_bytes: Vec<u8> = claims.try_into().expect("encode claims");
+        let key = KeyMaterial::from_bytes(&[1u8; 32]).expect("secret key");
+        let cert = BLSCert::sign(&key, claims_bytes.into()).expect("build cert");
+        let pubkey: [u8; 48] = key
+            .public_key()
+            .as_bytes()
+            .to_vec()
             .try_into()
             .expect("48-byte key");
         (cert, pubkey)

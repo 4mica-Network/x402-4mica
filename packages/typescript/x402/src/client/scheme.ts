@@ -5,6 +5,7 @@ import {
   PaymentRequirementsV1,
   X402Flow,
   X402PaymentRequired,
+  X402ResourceInfo,
 } from '@4mica/sdk'
 import { Account } from 'viem/accounts'
 import { SUPPORTED_NETWORKS } from '../server/scheme.js'
@@ -73,9 +74,23 @@ export class FourMicaEvmScheme implements SchemeNetworkClient {
         payload: signed.payload as unknown as Record<string, unknown>,
       }
     } else if (x402Version === 2) {
+      const resourcePayload =
+        paymentRequirements.extra &&
+        typeof paymentRequirements.extra === 'object' &&
+        'resource' in paymentRequirements.extra &&
+        typeof paymentRequirements.extra.resource === 'object' &&
+        paymentRequirements.extra.resource !== null
+          ? (paymentRequirements.extra.resource as Record<string, unknown>)
+          : {}
+
+      const resource: X402ResourceInfo = {
+        url: String(resourcePayload.url ?? ''),
+        description: String(resourcePayload.description ?? ''),
+        mimeType: String(resourcePayload.mimeType ?? ''),
+      }
       const paymentRequired: X402PaymentRequired = {
         x402Version: 2,
-        resource: { url: '', description: '', mimeType: '' },
+        resource,
         accepts: [paymentRequirements],
       }
       const signed = await x402Flow.signPaymentV2(
