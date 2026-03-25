@@ -1,6 +1,6 @@
 {
   "name": "@4mica/x402",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "type": "module",
   "description": "TypeScript x402 utilities for interacting with the 4Mica payment network",
   "license": "MIT",
