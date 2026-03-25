@@ -277,6 +277,20 @@ const client = new x402Client()
 const fetchWithPayment = wrapFetchWithPayment(fetch, client);
 ```
 
+## V2 Validation Policy Notes
+
+For x402 V2 requests, include validation policy metadata in `paymentRequirements.extra`:
+
+- `validationRegistryAddress`
+- `validatorAddress`
+- `validatorAgentId`
+- `minValidationScore`
+- optional `requiredValidationTag`
+
+`validationChainId` is optional. When omitted, the underlying 4mica SDK derives the
+`validation_chain_id` from the CAIP-2 `network` value (for example, `eip155:1`).
+If `validationChainId` is provided, it must match that network chain id.
+
 ## Complete Example
 
 ### Server

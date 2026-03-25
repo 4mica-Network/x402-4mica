@@ -59,6 +59,20 @@ resp = session.get("https://api.example.com/premium")
 print(resp.status_code, resp.text)
 ```
 
+## V2 Validation Policy Notes
+
+For x402 V2 requests, include validation policy metadata in `paymentRequirements.extra`:
+
+- `validationRegistryAddress`
+- `validatorAddress`
+- `validatorAgentId`
+- `minValidationScore`
+- optional `requiredValidationTag`
+
+`validationChainId` is optional. When omitted, the underlying 4mica SDK derives
+`validation_chain_id` from the CAIP-2 `network` value (for example, `eip155:1`).
+If provided, it must match that network chain id.
+
 ## Development
 
 ```bash
