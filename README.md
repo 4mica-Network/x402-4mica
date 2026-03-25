@@ -84,7 +84,7 @@ the BLS certificate to the recipient.
   run();
   ```
 
-- Rust SDK: `cargo add rust-sdk-4mica` and call
+- Rust SDK: `cargo add sdk-4mica` and call
   `X402Flow::sign_payment(requirements, user_address)` to obtain the same `payment.header` for the
   retry request.
 
@@ -97,7 +97,7 @@ the default `9000`). The mock resource will call the facilitator’s `/verify` e
 (for example decoded from an `X-PAYMENT` header).
 
 The bundled Rust example shows how to sign a payment
-header with `rust-sdk-4mica`:
+header with `sdk-4mica`:
 
 ```bash
 # requires PAYER_KEY, USER_ADDRESS, RESOURCE_URL and ASSET_ADDRESS
@@ -137,10 +137,10 @@ examples/python_client/requirements.txt`). A TypeScript version lives in `exampl
 ### Payment payload schema (v2)
 
 This repository follows the V2 schema implemented in the checked-out upstream codebases
-(`4mica-core`, `sdk-4mica`, `ts-sdk-4mica`, `py-sdk-4mica`). In particular, the current
-implementation still requires `validationChainId` / `validation_chain_id` as part of the V2
-validation policy. If another planning document omits that field, treat the code as the source of
-truth for this repository until all repos are updated together.
+(`4mica-core`, `sdk-4mica`, `ts-sdk-4mica`, `py-sdk-4mica`), and the facilitator does not require
+`validationChainId` inside `paymentRequirements.extra`. The signed claim still carries
+`validation_chain_id`, and the facilitator derives the expected chain id from the CAIP-2 payment
+network during V2 validation.
 
 `paymentPayload` for x402 V2 uses the `accepted` envelope shape:
 
@@ -187,8 +187,10 @@ The facilitator enforces that:
 - For V1, `maxAmountRequired` must match the signed `amount` exactly.
 - For V2, `amount` must match the signed `amount` exactly.
 - For V2, `paymentRequirements.extra` must include the validation policy fields expected by the
-  SDKs and facilitator: `validationRegistryAddress`, `validationChainId`, `validatorAddress`,
-  `validatorAgentId`, `minValidationScore`, and optional `requiredValidationTag`.
+  SDKs and facilitator: `validationRegistryAddress`, `validatorAddress`, `validatorAgentId`,
+  `minValidationScore`, and optional `requiredValidationTag`.
+- For V2, the signed `validation_chain_id` must match the CAIP-2 payment network, and the signed
+  validation registry must be present in core's `trusted_validation_registries`.
 - By default, the facilitator verifies certificates against the active guarantee domain advertised
   by core. If `X402_GUARANTEE_DOMAIN` is set (legacy `FOUR_MICA_GUARANTEE_DOMAIN` /
   `4MICA_GUARANTEE_DOMAIN` are also honored), that value overrides the core-provided domain.
@@ -312,50 +314,49 @@ The facilitator can transparently replace the EIP-3009/x402 debit flow. The key 
 
 ### Changes clients (payers) must make
 
-Payers sign guarantees instead of EIP-3009 transfers. Use the official SDK `rust-sdk-4mica` to manage collateral and produce signatures.
+Payers sign guarantees instead of EIP-3009 transfers. Use the official SDK `sdk-4mica` to manage collateral and produce signatures.
 
 1. **Install the SDK** – inside your agent crate run
 
    ```bash
-   cargo add rust-sdk-4mica
+   cargo add sdk-4mica
    ```
 
    or add the same entry manually to `Cargo.toml`.
 
 2. **Configure the client** – create a `Client` with the payer’s signing key. The SDK pulls the
-   remaining parameters (domain separator, operator key, etc.) from `X402_CORE_API_URL`.
+   remaining parameters (domain separator, operator key, etc.) from the configured core RPC URL.
 
    ```rust
+   use alloy::signers::local::PrivateKeySigner;
    use sdk_4mica::{Client, ConfigBuilder};
 
-   let config = ConfigBuilder::default()
-       .rpc_url("https://api.4mica.xyz/".into())
-       .wallet_private_key(std::env::var("PAYER_KEY")?)
-       .build()?;
+   let signer: PrivateKeySigner = std::env::var("PAYER_KEY")?.parse()?;
+   let config = ConfigBuilder::default().signer(signer).build()?;
    let client = Client::new(config).await?;
    ```
 
 3. **Fund the tab** – before requesting credit, ensure the payer has collateral using
    `client.user.deposit(...)` (or `approve_erc20` + `deposit` for tokens). Refer to the SDK README
    for concrete examples.
-4. **Sign guarantee claims** – derive `PaymentGuaranteeClaims` from the recipient’s
+4. **Sign guarantee claims** – derive `PaymentGuaranteeRequestClaims` from the recipient’s
    `paymentRequirements` (copy `tabId`, `userAddress`, `payTo`, `asset`, the desired `amount`, and
    the most recent `nextReqId`),
    choose a signing scheme (usually `SigningScheme::Eip712`), and call `client.user.sign_payment`.
 
    ```rust
-   use sdk_4mica::{PaymentGuaranteeClaims, SigningScheme, U256};
+   use sdk_4mica::{PaymentGuaranteeRequestClaims, SigningScheme, U256};
 
-   let claims = PaymentGuaranteeClaims {
-       user_address: payer_wallet.clone(),
-       recipient_address: pay_to.clone(),
-       tab_id: tab_id_u256,
+   let claims = PaymentGuaranteeRequestClaims::new(
+       payer_wallet.clone(),
+       pay_to.clone(),
+       tab_id_u256,
        // next_req_id should come from the /tabs response (nextReqId), parsed to U256.
-       req_id: next_req_id,
-       amount: U256::from(amount_wei),
-       asset_address: asset.clone(),
-       timestamp: chrono::Utc::now().timestamp() as u64,
-   };
+       next_req_id,
+       U256::from(amount_wei),
+       chrono::Utc::now().timestamp() as u64,
+       Some(asset.clone()),
+   );
    let signature = client
        .user
        .sign_payment(claims.clone(), SigningScheme::Eip712)

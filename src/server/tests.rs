@@ -20,7 +20,7 @@ use tower::ServiceExt;
 use crate::exact::ExactService;
 use crate::issuer::GuaranteeIssuer;
 use crate::verifier::CertificateValidator;
-use crypto_4mica::bls::KeyMaterial;
+use crypto::bls::KeyMaterial;
 
 use super::handlers::build_router;
 use super::model::{
@@ -239,6 +239,40 @@ async fn settle_endpoint_accepts_v2_payload() {
 }
 
 #[tokio::test]
+async fn settle_endpoint_accepts_v2_payload_with_checksum_addresses() {
+    let verifier = Arc::new(MockVerifier::success_v2());
+    let issuer = Arc::new(MockIssuer::success());
+    let state = test_state(verifier.clone(), issuer.clone());
+    let router = build_router(state);
+
+    let request_body = SettleRequest {
+        x402_version: Some(2),
+        payment_payload: payment_payload_v2("10"),
+        payment_requirements: sample_requirements_v2("10"),
+    };
+    let mut request_json = serde_json::to_value(request_body).unwrap();
+    request_json["paymentPayload"]["payload"]["claims"]["user_address"] =
+        json!("0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB");
+    request_json["paymentPayload"]["payload"]["claims"]["recipient_address"] =
+        json!("0x1111111111111111111111111111111111111111");
+    request_json["paymentPayload"]["payload"]["claims"]["asset_address"] =
+        json!("0x2222222222222222222222222222222222222222");
+
+    let response = router
+        .oneshot(post_json("/settle", &request_json))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: SettleResponse = serde_json::from_slice(&body).unwrap();
+    assert!(payload.success);
+    assert!(payload.certificate.is_some());
+    assert_eq!(verifier.verify_calls(), 1);
+    assert_eq!(issuer.issue_calls(), 1);
+}
+
+#[tokio::test]
 async fn supported_endpoint_returns_configured_kind() {
     let verifier = Arc::new(MockVerifier::success());
     let issuer = Arc::new(MockIssuer::success());
@@ -277,6 +311,7 @@ async fn supported_includes_exact_when_available() {
         verifier as Arc<dyn CertificateValidator>,
         issuer as Arc<dyn GuaranteeIssuer>,
         vec![1, 2],
+        vec!["0x3333333333333333333333333333333333333333".into()],
     );
     let exact = Arc::new(MockExact::new());
     let state = AppState::new(
@@ -622,7 +657,6 @@ async fn verify_rejects_v2_mismatched_validator() {
     let mut requirements = sample_requirements_v2("10");
     requirements.extra = Some(json!({
         "validationRegistryAddress": "0x3333333333333333333333333333333333333333",
-        "validationChainId": 11155111,
         "validatorAddress": "0x5555555555555555555555555555555555555555",
         "validatorAgentId": "0x7",
         "minValidationScore": 80,
@@ -809,6 +843,7 @@ fn test_state_with_versions(
         verifier.clone() as Arc<dyn CertificateValidator>,
         issuer.clone() as Arc<dyn GuaranteeIssuer>,
         versions,
+        vec!["0x3333333333333333333333333333333333333333".into()],
     );
     Arc::new(AppState::new(vec![handler], Vec::new(), None, None))
 }
@@ -858,7 +893,6 @@ fn sample_requirements_v2(amount: &str) -> PaymentRequirements {
         asset: format!("{:#x}", asset_address()),
         extra: Some(json!({
             "validationRegistryAddress": "0x3333333333333333333333333333333333333333",
-            "validationChainId": 11155111,
             "validatorAddress": "0x4444444444444444444444444444444444444444",
             "validatorAgentId": "0x7",
             "minValidationScore": 80,

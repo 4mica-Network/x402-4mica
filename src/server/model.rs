@@ -281,7 +281,7 @@ pub struct CoreCreateTabResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crypto_4mica::bls::KeyMaterial;
+    use crypto::bls::KeyMaterial;
     use serde_json::json;
 
     #[test]

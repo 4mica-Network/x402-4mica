@@ -37,7 +37,6 @@ describe('FourMicaEvmScheme', () => {
       extra: {
         rpcUrl: 'https://custom.rpc.example',
         validationRegistryAddress: '0x3333333333333333333333333333333333333333',
-        validationChainId: 11155111,
         validatorAddress: '0x4444444444444444444444444444444444444444',
         validatorAgentId: '7',
         minValidationScore: 80,
@@ -72,7 +71,6 @@ describe('FourMicaEvmScheme', () => {
     })
     expect(accepted.extra).toMatchObject({
       validationRegistryAddress: '0x3333333333333333333333333333333333333333',
-      validationChainId: 11155111,
       validatorAddress: '0x4444444444444444444444444444444444444444',
       validatorAgentId: '7',
       minValidationScore: 80,

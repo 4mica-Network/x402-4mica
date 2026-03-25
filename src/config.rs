@@ -1,8 +1,10 @@
 use std::net::SocketAddr;
+use std::str::FromStr;
 
 use anyhow::{Context, Result, bail};
 use reqwest::Url;
-use rpc::CorePublicParameters;
+use rpc::{CorePublicParameters, VALIDATION_REQUEST_BINDING_DOMAIN_V1};
+use sdk_4mica::Address;
 use serde::Deserialize;
 
 const DEFAULT_CORE_API_URL: &str = "https://api.4mica.xyz/";
@@ -103,6 +105,31 @@ fn public_parameters_from_core(params: CorePublicParameters) -> Result<PublicPar
         .transpose()?;
     let guarantee_domain =
         resolve_guarantee_domain(configured_guarantee_domain, active_guarantee_domain);
+    let trusted_validation_registries =
+        normalize_trusted_validation_registries(&params.trusted_validation_registries)?;
+    let validation_hash_canonicalization_version = params
+        .validation_hash_canonicalization_version
+        .trim()
+        .to_string();
+    if validation_hash_canonicalization_version.is_empty() {
+        bail!("core public params advertise an empty validation_hash_canonicalization_version");
+    }
+    if validation_hash_canonicalization_version != VALIDATION_REQUEST_BINDING_DOMAIN_V1 {
+        bail!(
+            "unsupported validation_hash_canonicalization_version {}, expected {}",
+            validation_hash_canonicalization_version,
+            VALIDATION_REQUEST_BINDING_DOMAIN_V1
+        );
+    }
+    if accepted_guarantee_versions
+        .iter()
+        .any(|version| *version >= 2)
+        && trusted_validation_registries.is_empty()
+    {
+        bail!(
+            "trusted_validation_registries must contain at least one address when V2 guarantees are accepted"
+        );
+    }
 
     Ok(PublicParameters {
         operator_public_key,
@@ -110,9 +137,23 @@ fn public_parameters_from_core(params: CorePublicParameters) -> Result<PublicPar
         active_guarantee_domain,
         max_accepted_guarantee_version: params.max_accepted_guarantee_version,
         accepted_guarantee_versions,
-        trusted_validation_registries: params.trusted_validation_registries,
-        validation_hash_canonicalization_version: params.validation_hash_canonicalization_version,
+        trusted_validation_registries,
+        validation_hash_canonicalization_version,
     })
+}
+
+fn normalize_trusted_validation_registries(raw: &[String]) -> Result<Vec<String>> {
+    let mut registries = Vec::with_capacity(raw.len());
+    for value in raw {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            bail!("trusted_validation_registries cannot contain empty addresses");
+        }
+        let address = Address::from_str(trimmed)
+            .with_context(|| format!("invalid trusted validation registry address {trimmed}"))?;
+        registries.push(format!("{address:#x}"));
+    }
+    Ok(registries)
 }
 
 fn load_networks_from_env() -> Result<Vec<NetworkConfig>> {
@@ -397,8 +438,7 @@ mod tests {
             trusted_validation_registries: vec![
                 "0x0000000000000000000000000000000000000011".into(),
             ],
-            validation_hash_canonicalization_version: "erc8004-validation-request-binding/v1"
-                .into(),
+            validation_hash_canonicalization_version: VALIDATION_REQUEST_BINDING_DOMAIN_V1.into(),
         }
     }
 
@@ -613,5 +653,34 @@ mod tests {
         let public_params = public_parameters_from_core(params).expect("public params");
         assert_eq!(public_params.active_guarantee_domain, Some([0x11; 32]));
         assert_eq!(public_params.guarantee_domain, Some([0x11; 32]));
+    }
+
+    #[test]
+    #[serial]
+    fn public_parameters_from_core_rejects_empty_registry_allowlist_for_v2() {
+        clear_network_env();
+        let mut params = sample_core_params();
+        params.trusted_validation_registries = Vec::new();
+
+        let err = public_parameters_from_core(params).unwrap_err();
+        assert!(
+            err.to_string().contains("trusted_validation_registries"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn public_parameters_from_core_rejects_unsupported_canonicalization_version() {
+        clear_network_env();
+        let mut params = sample_core_params();
+        params.validation_hash_canonicalization_version = "4MICA_VALIDATION_REQUEST_V2".into();
+
+        let err = public_parameters_from_core(params).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("unsupported validation_hash_canonicalization_version"),
+            "unexpected error: {err}"
+        );
     }
 }

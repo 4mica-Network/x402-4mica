@@ -45,7 +45,6 @@ def test_create_payment_payload_v2():
         extra={
             "rpcUrl": "https://custom.rpc.example",
             "validationRegistryAddress": "0x3333333333333333333333333333333333333333",
-            "validationChainId": 11155111,
             "validatorAddress": "0x4444444444444444444444444444444444444444",
             "validatorAgentId": "7",
             "minValidationScore": 80,
@@ -66,7 +65,6 @@ def test_create_payment_payload_v2():
         flow.last_payment_required.resource.description == "Premium dataset"
     )
     assert flow.last_accepted.extra["validationRegistryAddress"] == "0x3333333333333333333333333333333333333333"
-    assert flow.last_accepted.extra["validationChainId"] == 11155111
     assert flow.last_accepted.extra["validatorAddress"] == "0x4444444444444444444444444444444444444444"
     assert flow.last_accepted.extra["validatorAgentId"] == "7"
     assert flow.last_accepted.extra["minValidationScore"] == 80

@@ -217,6 +217,7 @@ pub(crate) struct FourMicaHandler {
     verifier: Arc<dyn CertificateValidator>,
     issuer: Arc<dyn GuaranteeIssuer>,
     supported_versions: Vec<u8>,
+    trusted_validation_registries: Vec<Address>,
 }
 
 impl FourMicaHandler {
@@ -226,6 +227,7 @@ impl FourMicaHandler {
         verifier: Arc<dyn CertificateValidator>,
         issuer: Arc<dyn GuaranteeIssuer>,
         supported_versions: Vec<u8>,
+        trusted_validation_registries: Vec<String>,
     ) -> Self {
         Self {
             scheme,
@@ -233,6 +235,10 @@ impl FourMicaHandler {
             verifier,
             issuer,
             supported_versions,
+            trusted_validation_registries: trusted_validation_registries
+                .into_iter()
+                .filter_map(|value| Address::from_str(&value).ok())
+                .collect(),
         }
     }
 
@@ -476,12 +482,35 @@ impl FourMicaHandler {
         request: &PaymentGuaranteeRequestClaimsV1,
         issued: &PaymentGuaranteeClaims,
     ) -> Result<(), ValidationError> {
+        let request_recipient = Address::from_str(&request.recipient_address).map_err(|_| {
+            ValidationError::InvalidClaims("invalid recipient address in requested claims".into())
+        })?;
+        let issued_recipient = Address::from_str(&issued.recipient_address).map_err(|_| {
+            ValidationError::InvalidCertificate(
+                "invalid recipient address in issued certificate".into(),
+            )
+        })?;
+        let request_asset = Address::from_str(&request.asset_address).map_err(|_| {
+            ValidationError::InvalidClaims("invalid asset address in requested claims".into())
+        })?;
+        let issued_asset = Address::from_str(&issued.asset_address).map_err(|_| {
+            ValidationError::InvalidCertificate(
+                "invalid asset address in issued certificate".into(),
+            )
+        })?;
+        let request_user = Address::from_str(&request.user_address).map_err(|_| {
+            ValidationError::InvalidClaims("invalid user address in requested claims".into())
+        })?;
+        let issued_user = Address::from_str(&issued.user_address).map_err(|_| {
+            ValidationError::InvalidCertificate("invalid user address in issued certificate".into())
+        })?;
+
         if issued.tab_id != request.tab_id
             || issued.req_id != request.req_id
             || issued.amount != request.amount
-            || issued.recipient_address != request.recipient_address
-            || issued.asset_address != request.asset_address
-            || issued.user_address != request.user_address
+            || issued_recipient != request_recipient
+            || issued_asset != request_asset
+            || issued_user != request_user
         {
             return Err(ValidationError::Mismatch(
                 "certificate values differ from requested claims".into(),
@@ -523,22 +552,22 @@ impl FourMicaHandler {
                 claims.validation_policy.validation_registry_address, validation_registry
             )));
         }
-
-        let validation_chain_id =
-            parse_required_u64_field(reqs_extra, "validationChainId", "validation_chain_id")?;
-        if claims.validation_policy.validation_chain_id != validation_chain_id {
+        if !self
+            .trusted_validation_registries
+            .contains(&claims.validation_policy.validation_registry_address)
+        {
             return Err(ValidationError::Mismatch(format!(
-                "validation chain id {} does not match requirement {}",
-                claims.validation_policy.validation_chain_id, validation_chain_id
+                "validation registry {} is not trusted by core metadata",
+                claims.validation_policy.validation_registry_address
             )));
         }
 
         let expected_network_chain_id =
             caip2_chain_id(&reqs.network).map_err(ValidationError::InvalidRequirements)?;
-        if validation_chain_id != expected_network_chain_id {
+        if claims.validation_policy.validation_chain_id != expected_network_chain_id {
             return Err(ValidationError::Mismatch(format!(
                 "validation chain id {} does not match payment network {}",
-                validation_chain_id, reqs.network
+                claims.validation_policy.validation_chain_id, reqs.network
             )));
         }
 

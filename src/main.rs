@@ -82,6 +82,7 @@ async fn main() -> anyhow::Result<()> {
             verifier,
             issuer,
             public_params.accepted_guarantee_versions.clone(),
+            public_params.trusted_validation_registries.clone(),
         ));
 
         let tab_service = Arc::new(CoreTabService::new(

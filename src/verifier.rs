@@ -1,6 +1,6 @@
 use std::fmt::Write;
 
-use crypto_4mica::bls::BlsPublicKey;
+use crypto::bls::BlsPublicKey;
 use sdk_4mica::{BLSCert, PaymentGuaranteeClaims};
 
 pub trait CertificateValidator: Send + Sync {
@@ -49,7 +49,7 @@ impl CertificateValidator for CertificateVerifier {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crypto_4mica::bls::KeyMaterial;
+    use crypto::bls::KeyMaterial;
     use sdk_4mica::{PaymentGuaranteeClaims, U256};
 
     fn build_claims(domain: [u8; 32]) -> PaymentGuaranteeClaims {
