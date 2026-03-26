@@ -36,13 +36,19 @@ interface TabConfig {
   ttlSeconds?: number
 }
 
+interface ResourceServerInternals {
+  register: (network: Network, server: SchemeNetworkServer) => unknown
+  hasExtension: (extension: string) => boolean
+  registerExtension: (extension: unknown) => unknown
+}
+
 interface HTTPServerInternals {
-  ResourceServer: Pick<x402ResourceServer, 'register' | 'hasExtension' | 'registerExtension'>
+  ResourceServer: ResourceServerInternals
   routesConfig: RoutesConfig
 }
 
-function getHTTPServerInternals(httpServer: x402HTTPResourceServer) {
-  return httpServer as x402HTTPResourceServer & HTTPServerInternals
+function getHTTPServerInternals(httpServer: x402HTTPResourceServer): HTTPServerInternals {
+  return httpServer as unknown as HTTPServerInternals
 }
 
 function registerNetworkServers(httpServer: x402HTTPResourceServer, tabEndpoint: string) {
