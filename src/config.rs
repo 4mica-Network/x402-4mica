@@ -69,6 +69,7 @@ pub struct PublicParameters {
     pub operator_public_key: [u8; 48],
     pub guarantee_domain: Option<[u8; 32]>,
     pub active_guarantee_domain: Option<[u8; 32]>,
+    pub legacy_v1_guarantee_domain: Option<[u8; 32]>,
     pub max_accepted_guarantee_version: u64,
     pub accepted_guarantee_versions: Vec<u8>,
     pub trusted_validation_registries: Vec<String>,
@@ -87,10 +88,14 @@ struct NetworkEnvConfig {
 
 pub async fn load_public_params(api_base: &Url) -> Result<PublicParameters> {
     let params = fetch_public_params(api_base).await?;
-    public_parameters_from_core(params)
+    let legacy_v1_guarantee_domain = fetch_legacy_v1_guarantee_domain(&params).await?;
+    public_parameters_from_core(params, legacy_v1_guarantee_domain)
 }
 
-fn public_parameters_from_core(params: CorePublicParameters) -> Result<PublicParameters> {
+fn public_parameters_from_core(
+    params: CorePublicParameters,
+    legacy_v1_guarantee_domain: Option<[u8; 32]>,
+) -> Result<PublicParameters> {
     let accepted_guarantee_versions =
         normalize_accepted_guarantee_versions(&params.accepted_guarantee_versions_or_default())?;
     let active_guarantee_domain =
@@ -135,6 +140,7 @@ fn public_parameters_from_core(params: CorePublicParameters) -> Result<PublicPar
         operator_public_key,
         guarantee_domain,
         active_guarantee_domain,
+        legacy_v1_guarantee_domain,
         max_accepted_guarantee_version: params.max_accepted_guarantee_version,
         accepted_guarantee_versions,
         trusted_validation_registries,
@@ -372,6 +378,57 @@ async fn fetch_public_params(base: &Url) -> Result<CorePublicParameters> {
     Ok(response.json::<CorePublicParameters>().await?)
 }
 
+async fn fetch_legacy_v1_guarantee_domain(
+    params: &CorePublicParameters,
+) -> Result<Option<[u8; 32]>> {
+    let accepted_versions = params.accepted_guarantee_versions_or_default();
+    if !accepted_versions.contains(&1) || params.max_accepted_guarantee_version <= 1 {
+        return Ok(None);
+    }
+
+    let contract_address = params.contract_address.trim();
+    let rpc_url = params.ethereum_http_rpc_url.trim();
+    if contract_address.is_empty() || rpc_url.is_empty() {
+        return Ok(None);
+    }
+
+    let payload = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "eth_call",
+        "params": [
+            {
+                "to": contract_address,
+                "data": "0x991ce4cd"
+            },
+            "latest"
+        ]
+    });
+
+    let client = reqwest::Client::new();
+    let response = match client.post(rpc_url).json(&payload).send().await {
+        Ok(value) => value,
+        Err(_) => return Ok(None),
+    };
+    let body = match response.error_for_status() {
+        Ok(value) => match value.json::<serde_json::Value>().await {
+            Ok(body) => body,
+            Err(_) => return Ok(None),
+        },
+        Err(_) => return Ok(None),
+    };
+
+    if body.get("error").is_some() {
+        return Ok(None);
+    }
+
+    let Some(result_hex) = body.get("result").and_then(|value| value.as_str()) else {
+        return Ok(None);
+    };
+    parse_optional_hex_array::<32>(result_hex)
+        .context("invalid guaranteeDomainSeparator result from ethereum rpc")
+}
+
 fn parse_hex_array<const N: usize>(value: &str) -> Result<[u8; N]> {
     let trimmed = value.strip_prefix("0x").unwrap_or(value);
     let decoded = hex::decode(trimmed)?;
@@ -590,7 +647,7 @@ mod tests {
         let mut params = sample_core_params();
         params.accepted_guarantee_versions = Vec::new();
 
-        let public_params = public_parameters_from_core(params).expect("public params");
+        let public_params = public_parameters_from_core(params, None).expect("public params");
         assert_eq!(public_params.accepted_guarantee_versions, vec![1, 2]);
         assert_eq!(public_params.guarantee_domain, Some([0x11; 32]));
     }
@@ -602,7 +659,7 @@ mod tests {
         let mut params = sample_core_params();
         params.active_guarantee_domain_separator = "0x1234".into();
 
-        let err = public_parameters_from_core(params).unwrap_err();
+        let err = public_parameters_from_core(params, None).unwrap_err();
         assert!(
             err.to_string()
                 .contains("invalid active_guarantee_domain_separator"),
@@ -618,7 +675,7 @@ mod tests {
         params.accepted_guarantee_versions = vec![3];
         params.max_accepted_guarantee_version = 3;
 
-        let err = public_parameters_from_core(params).unwrap_err();
+        let err = public_parameters_from_core(params, None).unwrap_err();
         assert!(
             err.to_string().contains("x402-compatible"),
             "unexpected error: {err}"
@@ -637,7 +694,7 @@ mod tests {
         }
         let params = sample_core_params();
 
-        let public_params = public_parameters_from_core(params).expect("public params");
+        let public_params = public_parameters_from_core(params, None).expect("public params");
         assert_eq!(public_params.active_guarantee_domain, Some([0x11; 32]));
         assert_eq!(public_params.guarantee_domain, Some([0x22; 32]));
 
@@ -650,7 +707,7 @@ mod tests {
         clear_network_env();
         let params = sample_core_params();
 
-        let public_params = public_parameters_from_core(params).expect("public params");
+        let public_params = public_parameters_from_core(params, None).expect("public params");
         assert_eq!(public_params.active_guarantee_domain, Some([0x11; 32]));
         assert_eq!(public_params.guarantee_domain, Some([0x11; 32]));
     }
@@ -662,7 +719,7 @@ mod tests {
         let mut params = sample_core_params();
         params.trusted_validation_registries = Vec::new();
 
-        let err = public_parameters_from_core(params).unwrap_err();
+        let err = public_parameters_from_core(params, None).unwrap_err();
         assert!(
             err.to_string().contains("trusted_validation_registries"),
             "unexpected error: {err}"
@@ -676,7 +733,7 @@ mod tests {
         let mut params = sample_core_params();
         params.validation_hash_canonicalization_version = "4MICA_VALIDATION_REQUEST_V2".into();
 
-        let err = public_parameters_from_core(params).unwrap_err();
+        let err = public_parameters_from_core(params, None).unwrap_err();
         assert!(
             err.to_string()
                 .contains("unsupported validation_hash_canonicalization_version"),
