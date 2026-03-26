@@ -24,9 +24,7 @@ describe('FourMicaEvmScheme', () => {
       signPaymentV2,
     } as never)
 
-    const scheme = await FourMicaEvmScheme.create(
-      privateKeyToAccount(`0x${'11'.repeat(32)}`)
-    )
+    const scheme = await FourMicaEvmScheme.create(privateKeyToAccount(`0x${'11'.repeat(32)}`))
 
     const requirements = {
       scheme: '4mica-credit',
@@ -84,9 +82,7 @@ describe('FourMicaEvmScheme', () => {
       signPaymentV2: vi.fn(),
     } as never)
 
-    const scheme = await FourMicaEvmScheme.create(
-      privateKeyToAccount(`0x${'11'.repeat(32)}`)
-    )
+    const scheme = await FourMicaEvmScheme.create(privateKeyToAccount(`0x${'11'.repeat(32)}`))
 
     await expect(
       scheme.createPaymentPayload(3, {

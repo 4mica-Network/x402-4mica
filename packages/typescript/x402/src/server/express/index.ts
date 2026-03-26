@@ -36,10 +36,20 @@ interface TabConfig {
   ttlSeconds?: number
 }
 
+interface HTTPServerInternals {
+  ResourceServer: Pick<x402ResourceServer, 'register' | 'hasExtension' | 'registerExtension'>
+  routesConfig: RoutesConfig
+}
+
+function getHTTPServerInternals(httpServer: x402HTTPResourceServer) {
+  return httpServer as x402HTTPResourceServer & HTTPServerInternals
+}
+
 function registerNetworkServers(httpServer: x402HTTPResourceServer, tabEndpoint: string) {
   const schemeServer = new FourMicaEvmScheme(tabEndpoint)
+  const server = getHTTPServerInternals(httpServer)
   SUPPORTED_NETWORKS.forEach((network) => {
-    ;(httpServer as any).ResourceServer.register(network, schemeServer)
+    server.ResourceServer.register(network, schemeServer)
   })
 }
 
@@ -51,6 +61,20 @@ function checkIfBazaarNeeded(routes: RoutesConfig): boolean {
   return Object.values(routes).some((routeConfig) => {
     return !!(routeConfig.extensions && 'bazaar' in routeConfig.extensions)
   })
+}
+
+interface OpenTabHttpError {
+  status: number
+  response: unknown
+}
+
+function isOpenTabHttpError(error: unknown): error is OpenTabHttpError {
+  if (typeof error !== 'object' || error === null) {
+    return false
+  }
+
+  const candidate = error as { status?: unknown; response?: unknown }
+  return typeof candidate.status === 'number' && 'response' in candidate
 }
 
 /**
@@ -118,13 +142,14 @@ export function paymentMiddlewareFromHTTPServer(
   // Dynamically register bazaar extension if routes declare it and not already registered
   // Skip if pre-registered (e.g., in serverless environments where static imports are used)
   let bazaarPromise: Promise<void> | null = null
+  const httpServerInternals = getHTTPServerInternals(httpServer)
   if (
-    checkIfBazaarNeeded((httpServer as any).routesConfig) &&
-    !(httpServer as any).ResourceServer.hasExtension('bazaar')
+    checkIfBazaarNeeded(httpServerInternals.routesConfig) &&
+    !httpServerInternals.ResourceServer.hasExtension('bazaar')
   ) {
     bazaarPromise = import('@x402/extensions/bazaar')
       .then(({ bazaarResourceServerExtension }) => {
-        ;(httpServer as any).ResourceServer.registerExtension(bazaarResourceServerExtension)
+        httpServerInternals.ResourceServer.registerExtension(bazaarResourceServerExtension)
       })
       .catch((err) => {
         console.error('Failed to load bazaar extension:', err)
@@ -150,9 +175,8 @@ export function paymentMiddlewareFromHTTPServer(
           // Return the response
           return res.json(openTabResponse)
         } catch (error) {
-          if (error instanceof Error && 'status' in error) {
-            const openTabError = error as any
-            return res.status(openTabError.status).json(openTabError.response)
+          if (isOpenTabHttpError(error)) {
+            return res.status(error.status).json(error.response)
           }
           console.error('Failed to open tab:', error)
           return res.status(500).json({
@@ -200,7 +224,7 @@ export function paymentMiddlewareFromHTTPServer(
         // No payment needed, proceed directly to the route handler
         return next()
 
-      case 'payment-error':
+      case 'payment-error': {
         // Payment required but not provided or invalid
         const { response } = result
         res.status(response.status)
@@ -213,8 +237,9 @@ export function paymentMiddlewareFromHTTPServer(
           res.json(response.body || {})
         }
         return
+      }
 
-      case 'payment-verified':
+      case 'payment-verified': {
         // Payment is valid, need to wrap response for settlement
         const { paymentPayload, paymentRequirements } = result
 
@@ -346,6 +371,7 @@ export function paymentMiddlewareFromHTTPServer(
           bufferedCalls = []
         }
         return
+      }
     }
   }
 }

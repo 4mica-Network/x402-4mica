@@ -2,8 +2,6 @@ import 'dotenv/config'
 import { privateKeyToAccount } from 'viem/accounts'
 import { Client, ConfigBuilder } from '@4mica/sdk'
 
-const USDC_ADDRESS = '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238'
-
 async function main() {
   const privateKey = process.env.PRIVATE_KEY
   if (!privateKey || !privateKey.startsWith('0x')) {
