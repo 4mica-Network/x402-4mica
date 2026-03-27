@@ -1,16 +1,11 @@
 import pytest
 
-from fourmica_x402.http import (
-    fastapi_payment_middleware_from_config,
-    flask_payment_middleware_from_config,
-)
-
-pytest.importorskip("x402")
-fastapi = pytest.importorskip("fastapi")
-flask = pytest.importorskip("flask")
-
 
 def test_fastapi_wrapper_builds():
+    pytest.importorskip("x402")
+    fastapi = pytest.importorskip("fastapi")
+    from fourmica_x402.http import fastapi_payment_middleware_from_config
+
     app = fastapi.FastAPI()
     routes = {
         "GET /protected": {
@@ -36,6 +31,10 @@ def test_fastapi_wrapper_builds():
 
 
 def test_flask_wrapper_builds():
+    pytest.importorskip("x402")
+    flask = pytest.importorskip("flask")
+    from fourmica_x402.http import flask_payment_middleware_from_config
+
     app = flask.Flask(__name__)
     routes = {
         "GET /protected": {
