@@ -624,7 +624,13 @@ async fn verify_rejects_v2_missing_validation_policy_requirements() {
     let router = build_router(state);
 
     let mut requirements = sample_requirements_v2("10");
-    requirements.extra = Some(json!({}));
+    requirements.extra = Some(json!({
+        "validationRegistryAddress": "0x3333333333333333333333333333333333333333",
+        "validatorAddress": "0x4444444444444444444444444444444444444444",
+        "validatorAgentId": "0x7",
+        "minValidationScore": 80,
+        "requiredValidationTag": "hard-finality"
+    }));
 
     let request_body = VerifyRequest {
         x402_version: Some(2),
@@ -642,7 +648,7 @@ async fn verify_rejects_v2_missing_validation_policy_requirements() {
     let payload: VerifyResponse = serde_json::from_slice(&body).unwrap();
     assert!(!payload.is_valid);
     let reason = payload.invalid_reason.expect("reason");
-    assert!(reason.contains("validationRegistryAddress"));
+    assert!(reason.contains("jobHash"));
     assert_eq!(verifier.verify_calls(), 0);
     assert_eq!(issuer.issue_calls(), 0);
 }
@@ -660,7 +666,8 @@ async fn verify_rejects_v2_mismatched_validator() {
         "validatorAddress": "0x5555555555555555555555555555555555555555",
         "validatorAgentId": "0x7",
         "minValidationScore": 80,
-        "requiredValidationTag": "hard-finality"
+        "requiredValidationTag": "hard-finality",
+        "jobHash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     }));
 
     let request_body = VerifyRequest {
@@ -896,7 +903,8 @@ fn sample_requirements_v2(amount: &str) -> PaymentRequirements {
             "validatorAddress": "0x4444444444444444444444444444444444444444",
             "validatorAgentId": "0x7",
             "minValidationScore": 80,
-            "requiredValidationTag": "hard-finality"
+            "requiredValidationTag": "hard-finality",
+            "jobHash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         })),
     }
 }
@@ -955,6 +963,7 @@ fn payment_payload_v2(amount: &str) -> X402PaymentPayload {
         min_validation_score: 80,
         validation_subject_hash: alloy::primitives::B256::from(subject_hash),
         required_validation_tag: "hard-finality".into(),
+        job_hash: alloy::primitives::B256::repeat_byte(0xAA),
     })
     .expect("request hash");
     let value = json!({
@@ -983,7 +992,8 @@ fn payment_payload_v2(amount: &str) -> X402PaymentPayload {
                 "validator_agent_id": "0x7",
                 "min_validation_score": 80,
                 "validation_subject_hash": format!("0x{}", hex::encode(subject_hash)),
-                "required_validation_tag": "hard-finality"
+                "required_validation_tag": "hard-finality",
+                "job_hash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
             },
             "signature": "0x1111",
             "scheme": "eip712"
@@ -1049,6 +1059,7 @@ fn sample_claims_v2() -> PaymentGuaranteeClaims {
         min_validation_score: 80,
         validation_subject_hash: alloy::primitives::B256::from(subject_hash),
         required_validation_tag: "hard-finality".into(),
+        job_hash: alloy::primitives::B256::repeat_byte(0xAA),
     };
     policy.validation_request_hash = alloy::primitives::B256::from(
         compute_validation_request_hash(&policy).expect("request hash"),

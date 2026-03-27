@@ -42,7 +42,9 @@ class OpenTabResponse:
         ttl_seconds = pick(["ttlSeconds", "ttl_seconds"])
         next_req_id = pick(["nextReqId", "next_req_id", "reqId", "req_id"])
 
-        if not all([tab_id, user_address, recipient_address, asset_address, start_timestamp, ttl_seconds]):
+        if not all(
+            [tab_id, user_address, recipient_address, asset_address, start_timestamp, ttl_seconds]
+        ):
             raise ValueError("openTab response missing required fields")
 
         return cls(
@@ -162,9 +164,7 @@ class FourMicaFacilitatorClient(HTTPFacilitatorClient):
             json=request_body,
         )
         if response.status_code != 200:
-            raise ValueError(
-                f"Facilitator settle failed ({response.status_code}): {response.text}"
-            )
+            raise ValueError(f"Facilitator settle failed ({response.status_code}): {response.text}")
         return _normalize_settle_response(response.json(), requirements)
 
 
@@ -245,9 +245,7 @@ class FourMicaFacilitatorClientSync(HTTPFacilitatorClientSync):
             json=request_body,
         )
         if response.status_code != 200:
-            raise ValueError(
-                f"Facilitator settle failed ({response.status_code}): {response.text}"
-            )
+            raise ValueError(f"Facilitator settle failed ({response.status_code}): {response.text}")
         return _normalize_settle_response(response.json(), requirements)
 
 

@@ -156,6 +156,22 @@ The recommended middleware factory for most use cases. Automatically configures 
 6. **`paywall`** (optional): Custom paywall provider
 7. **`syncFacilitatorOnStart`** (optional): Whether to sync with facilitator on startup (defaults to true)
 
+#### V2 Requirements Extra
+
+When using x402 V2, `paymentRequirements.extra` must include the validation policy fields expected by the 4mica SDKs and facilitator:
+
+```typescript
+const extra = {
+  validationRegistryAddress: '0x3333333333333333333333333333333333333333',
+  validatorAddress: '0x4444444444444444444444444444444444444444',
+  validatorAgentId: '7',
+  minValidationScore: 80,
+  jobHash: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+  requiredValidationTag: 'hard-finality', // optional
+  tabEndpoint: 'https://api.example.com/tabs/open',
+}
+```
+
 #### Supported Networks
 
 - `eip155:11155111` - Ethereum Sepolia

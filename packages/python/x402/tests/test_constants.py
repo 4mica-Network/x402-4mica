@@ -19,7 +19,9 @@ def test_default_rpc_urls_match_expected():
 
 
 def test_default_assets_match_expected():
-    assert DEFAULT_ASSETS["eip155:11155111"]["address"] == "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238"
+    assert (
+        DEFAULT_ASSETS["eip155:11155111"]["address"] == "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238"
+    )
     assert DEFAULT_ASSETS["eip155:11155111"]["decimals"] == 6
     assert DEFAULT_ASSETS["eip155:80002"]["address"] == "0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582"
     assert DEFAULT_ASSETS["eip155:80002"]["decimals"] == 6

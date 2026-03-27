@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Dict, List, TypedDict
 
-
 SUPPORTED_NETWORKS: List[str] = ["eip155:11155111", "eip155:80002"]
 
 DEFAULT_RPC_URLS: Dict[str, str] = {

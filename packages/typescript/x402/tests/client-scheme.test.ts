@@ -39,6 +39,7 @@ describe('FourMicaEvmScheme', () => {
         validatorAgentId: '7',
         minValidationScore: 80,
         requiredValidationTag: 'hard-finality',
+        jobHash: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
         resource: {
           url: 'https://api.example.com/premium',
           description: 'Premium dataset',
@@ -73,6 +74,7 @@ describe('FourMicaEvmScheme', () => {
       validatorAgentId: '7',
       minValidationScore: 80,
       requiredValidationTag: 'hard-finality',
+      jobHash: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
     })
   })
 

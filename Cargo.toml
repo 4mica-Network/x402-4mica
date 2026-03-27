@@ -5,9 +5,9 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0"
-rpc-4mica = "1.0.0"
-sdk-4mica = "1.0.0"
-crypto-4mica = "1.0.0"
+rpc-4mica = "1.1.0"
+sdk-4mica = "1.1.0"
+crypto-4mica = "1.1.0"
 axum = { version = "0.8.8", features = ["macros", "json"] }
 base64 = "0.22"
 dotenvy = "0.15"

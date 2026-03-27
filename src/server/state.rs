@@ -4,6 +4,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use alloy::primitives::B256;
 use async_trait::async_trait;
 use axum::http::StatusCode;
 use reqwest::{Client, Url};
@@ -598,6 +599,14 @@ impl FourMicaHandler {
             )));
         }
 
+        let job_hash = parse_required_b256_field(reqs_extra, "jobHash", "job_hash")?;
+        if claims.validation_policy.job_hash != job_hash {
+            return Err(ValidationError::Mismatch(format!(
+                "job hash '{}' does not match requirement '{}'",
+                claims.validation_policy.job_hash, job_hash
+            )));
+        }
+
         let required_validation_tag = parse_optional_string_field(
             reqs_extra,
             "requiredValidationTag",
@@ -919,6 +928,20 @@ fn parse_required_u256_field(
     Err(ValidationError::InvalidRequirements(format!(
         "invalid {camel}"
     )))
+}
+
+fn parse_required_b256_field(
+    extra: &Map<String, serde_json::Value>,
+    camel: &str,
+    snake: &str,
+) -> Result<B256, ValidationError> {
+    let value = extra_value(extra, camel, snake)
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            ValidationError::InvalidRequirements(format!("{camel} is required for x402Version 2"))
+        })?;
+    B256::from_str(value)
+        .map_err(|_| ValidationError::InvalidRequirements(format!("invalid {camel}")))
 }
 
 fn parse_optional_string_field(

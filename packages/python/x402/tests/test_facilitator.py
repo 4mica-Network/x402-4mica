@@ -1,16 +1,16 @@
-import json
 import asyncio
+import json
 
 import pytest
-
-httpx = pytest.importorskip("httpx")
+from x402.http import FacilitatorConfig
 
 from fourmica_x402.facilitator import (
     FourMicaFacilitatorClient,
     FourMicaFacilitatorClientSync,
     OpenTabError,
 )
-from x402.http import FacilitatorConfig
+
+httpx = pytest.importorskip("httpx")
 
 
 class StubModel:
@@ -49,9 +49,7 @@ def test_open_tab_async_success():
 
     transport = httpx.MockTransport(handler)
     async_client = httpx.AsyncClient(transport=transport)
-    client = FourMicaFacilitatorClient(
-        FacilitatorConfig(url=base_url, http_client=async_client)
-    )
+    client = FourMicaFacilitatorClient(FacilitatorConfig(url=base_url, http_client=async_client))
 
     try:
         resp = run(client.open_tab("0xabc", {"payTo": "0xdef"}, ttl_seconds=3600))
@@ -80,9 +78,7 @@ def test_open_tab_async_error():
 
     transport = httpx.MockTransport(handler)
     async_client = httpx.AsyncClient(transport=transport)
-    client = FourMicaFacilitatorClient(
-        FacilitatorConfig(url=base_url, http_client=async_client)
-    )
+    client = FourMicaFacilitatorClient(FacilitatorConfig(url=base_url, http_client=async_client))
 
     try:
         with pytest.raises(OpenTabError):
@@ -109,9 +105,7 @@ def test_open_tab_sync_success():
 
     transport = httpx.MockTransport(handler)
     sync_client = httpx.Client(transport=transport)
-    client = FourMicaFacilitatorClientSync(
-        FacilitatorConfig(url=base_url, http_client=sync_client)
-    )
+    client = FourMicaFacilitatorClientSync(FacilitatorConfig(url=base_url, http_client=sync_client))
 
     resp = client.open_tab("0xabc", {"payTo": "0xdef"})
     assert resp.tab_id == "0x1"
@@ -127,9 +121,7 @@ def test_open_tab_sync_error():
 
     transport = httpx.MockTransport(handler)
     sync_client = httpx.Client(transport=transport)
-    client = FourMicaFacilitatorClientSync(
-        FacilitatorConfig(url=base_url, http_client=sync_client)
-    )
+    client = FourMicaFacilitatorClientSync(FacilitatorConfig(url=base_url, http_client=sync_client))
 
     with pytest.raises(OpenTabError):
         client.open_tab("0xabc", {"payTo": "0xdef"})
@@ -158,19 +150,19 @@ def test_settle_async_normalizes_certificate_and_alias_fields():
 
     transport = httpx.MockTransport(handler)
     async_client = httpx.AsyncClient(transport=transport)
-    client = FourMicaFacilitatorClient(
-        FacilitatorConfig(url=base_url, http_client=async_client)
-    )
+    client = FourMicaFacilitatorClient(FacilitatorConfig(url=base_url, http_client=async_client))
 
     try:
-        response = run(client.settle(
-            StubModel(
-                x402_version=2,
-                accepted={"scheme": "4mica-credit"},
-                payload={"claims": {"version": "v2"}},
-            ),
-            StubModel(network="eip155:11155111", scheme="4mica-credit"),
-        ))
+        response = run(
+            client.settle(
+                StubModel(
+                    x402_version=2,
+                    accepted={"scheme": "4mica-credit"},
+                    payload={"claims": {"version": "v2"}},
+                ),
+                StubModel(network="eip155:11155111", scheme="4mica-credit"),
+            )
+        )
         assert response.success is True
         assert response.transaction == "0xdeadbeef"
         assert response.network == "eip155:11155111"
@@ -198,19 +190,19 @@ def test_settle_async_normalizes_alias_fields_without_certificate():
 
     transport = httpx.MockTransport(handler)
     async_client = httpx.AsyncClient(transport=transport)
-    client = FourMicaFacilitatorClient(
-        FacilitatorConfig(url=base_url, http_client=async_client)
-    )
+    client = FourMicaFacilitatorClient(FacilitatorConfig(url=base_url, http_client=async_client))
 
     try:
-        response = run(client.settle(
-            StubModel(
-                x402_version=2,
-                accepted={"scheme": "4mica-credit"},
-                payload={"claims": {"version": "v2"}},
-            ),
-            StubModel(network="eip155:80002", scheme="4mica-credit"),
-        ))
+        response = run(
+            client.settle(
+                StubModel(
+                    x402_version=2,
+                    accepted={"scheme": "4mica-credit"},
+                    payload={"claims": {"version": "v2"}},
+                ),
+                StubModel(network="eip155:80002", scheme="4mica-credit"),
+            )
+        )
         assert response.success is True
         assert response.transaction == "0xabc123"
         assert response.network == "eip155:80002"
@@ -234,20 +226,20 @@ def test_settle_async_raises_on_facilitator_error_reason():
 
     transport = httpx.MockTransport(handler)
     async_client = httpx.AsyncClient(transport=transport)
-    client = FourMicaFacilitatorClient(
-        FacilitatorConfig(url=base_url, http_client=async_client)
-    )
+    client = FourMicaFacilitatorClient(FacilitatorConfig(url=base_url, http_client=async_client))
 
     try:
         with pytest.raises(ValueError, match="unsupported x402Version 2"):
-            run(client.settle(
-                StubModel(
-                    x402_version=2,
-                    accepted={"scheme": "4mica-credit"},
-                    payload={"claims": {"version": "v2"}},
-                ),
-                StubModel(network="eip155:11155111", scheme="4mica-credit"),
-            ))
+            run(
+                client.settle(
+                    StubModel(
+                        x402_version=2,
+                        accepted={"scheme": "4mica-credit"},
+                        payload={"claims": {"version": "v2"}},
+                    ),
+                    StubModel(network="eip155:11155111", scheme="4mica-credit"),
+                )
+            )
     finally:
         run(async_client.aclose())
 
@@ -271,9 +263,7 @@ def test_settle_sync_normalizes_alias_fields():
 
     transport = httpx.MockTransport(handler)
     sync_client = httpx.Client(transport=transport)
-    client = FourMicaFacilitatorClientSync(
-        FacilitatorConfig(url=base_url, http_client=sync_client)
-    )
+    client = FourMicaFacilitatorClientSync(FacilitatorConfig(url=base_url, http_client=sync_client))
 
     response = client.settle(
         StubModel(

@@ -188,7 +188,7 @@ The facilitator enforces that:
 - For V2, `amount` must match the signed `amount` exactly.
 - For V2, `paymentRequirements.extra` must include the validation policy fields expected by the
   SDKs and facilitator: `validationRegistryAddress`, `validatorAddress`, `validatorAgentId`,
-  `minValidationScore`, and optional `requiredValidationTag`.
+  `minValidationScore`, `jobHash`, and optional `requiredValidationTag`.
 - For V2, the signed `validation_chain_id` must match the CAIP-2 payment network, and the signed
   validation registry must be present in core's `trusted_validation_registries`.
 - By default, the facilitator verifies certificates against the active guarantee domain advertised

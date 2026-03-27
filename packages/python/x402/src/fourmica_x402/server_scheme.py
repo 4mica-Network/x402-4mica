@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, List
+from typing import Callable, List
 
 from x402.interfaces import SchemeNetworkServer
 from x402.schemas import AssetAmount, Network, PaymentRequirements, Price
@@ -69,9 +69,7 @@ class FourMicaEvmScheme(SchemeNetworkServer):
     def _default_money_conversion(self, amount: float, network: Network) -> AssetAmount:
         asset_info = DEFAULT_ASSETS.get(network)
         if not asset_info:
-            raise UnsupportedNetworkError(
-                f"No default asset configured for network {network}"
-            )
+            raise UnsupportedNetworkError(f"No default asset configured for network {network}")
         token_amount = self._convert_to_token_amount(str(amount), asset_info["decimals"])
         return AssetAmount(
             amount=token_amount,

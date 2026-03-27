@@ -1,10 +1,10 @@
 import pytest
+from x402.schemas import PaymentRequirements
+
+from fourmica_x402.constants import UnsupportedNetworkError
+from fourmica_x402.server_scheme import FourMicaEvmScheme
 
 pytest.importorskip("x402")
-
-from fourmica_x402.server_scheme import FourMicaEvmScheme
-from fourmica_x402.constants import UnsupportedNetworkError
-from x402.schemas import PaymentRequirements
 
 
 def test_parse_price_asset_amount_passthrough():

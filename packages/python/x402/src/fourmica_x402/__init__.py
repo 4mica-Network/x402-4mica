@@ -9,6 +9,7 @@ from .constants import (
     UnsupportedNetworkError,
     get_default_asset,
 )
+
 __all__ = [
     "SUPPORTED_NETWORKS",
     "DEFAULT_RPC_URLS",
@@ -73,8 +74,16 @@ except Exception:
     flask_payment_middleware_from_config = None  # type: ignore[assignment]
 
 try:  # Optional: re-export core x402 types if available
-    from x402.schemas import PaymentPayload, PaymentRequirements, PaymentRequired
-    from x402.schemas.v1 import PaymentPayloadV1, PaymentRequirementsV1, PaymentRequiredV1
+    from x402.schemas import (  # noqa: F401
+        PaymentPayload,
+        PaymentRequired,
+        PaymentRequirements,
+    )
+    from x402.schemas.v1 import (  # noqa: F401
+        PaymentPayloadV1,
+        PaymentRequiredV1,
+        PaymentRequirementsV1,
+    )
 
     __all__.extend(
         [

@@ -1,13 +1,13 @@
 import pytest
 
-pytest.importorskip("x402")
-fastapi = pytest.importorskip("fastapi")
-flask = pytest.importorskip("flask")
-
 from fourmica_x402.http import (
     fastapi_payment_middleware_from_config,
     flask_payment_middleware_from_config,
 )
+
+pytest.importorskip("x402")
+fastapi = pytest.importorskip("fastapi")
+flask = pytest.importorskip("flask")
 
 
 def test_fastapi_wrapper_builds():

@@ -1,12 +1,12 @@
 import pytest
+from x402.schemas import PaymentRequirements
+from x402.schemas.v1 import PaymentRequirementsV1
+
+from fourmica_x402.client_scheme import FourMicaEvmScheme
 
 pytest.importorskip("x402")
 pytest.importorskip("fourmica_sdk")
 pytest.importorskip("eth_account")
-
-from fourmica_x402.client_scheme import FourMicaEvmScheme
-from x402.schemas import PaymentRequirements
-from x402.schemas.v1 import PaymentRequirementsV1
 
 
 class StubSigned:
@@ -49,11 +49,12 @@ def test_create_payment_payload_v2():
             "validatorAgentId": "7",
             "minValidationScore": 80,
             "requiredValidationTag": "hard-finality",
+            "jobHash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "resource": {
                 "url": "https://api.example.com/premium",
                 "description": "Premium dataset",
                 "mimeType": "application/json",
-            }
+            },
         },
     )
     payload = scheme.create_payment_payload(req)
@@ -61,14 +62,21 @@ def test_create_payment_payload_v2():
     assert payload["claims"]["tab_id"] == "0x1"
     flow = scheme._flows["https://custom.rpc.example"]
     assert flow.last_payment_required.resource.url == "https://api.example.com/premium"
+    assert flow.last_payment_required.resource.description == "Premium dataset"
     assert (
-        flow.last_payment_required.resource.description == "Premium dataset"
+        flow.last_accepted.extra["validationRegistryAddress"]
+        == "0x3333333333333333333333333333333333333333"
     )
-    assert flow.last_accepted.extra["validationRegistryAddress"] == "0x3333333333333333333333333333333333333333"
-    assert flow.last_accepted.extra["validatorAddress"] == "0x4444444444444444444444444444444444444444"
+    assert (
+        flow.last_accepted.extra["validatorAddress"] == "0x4444444444444444444444444444444444444444"
+    )
     assert flow.last_accepted.extra["validatorAgentId"] == "7"
     assert flow.last_accepted.extra["minValidationScore"] == 80
     assert flow.last_accepted.extra["requiredValidationTag"] == "hard-finality"
+    assert (
+        flow.last_accepted.extra["jobHash"]
+        == "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    )
 
 
 def test_create_payment_payload_v1():

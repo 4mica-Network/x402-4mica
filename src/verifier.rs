@@ -107,6 +107,7 @@ mod tests {
                 min_validation_score: 80,
                 validation_subject_hash: B256::from(subject_hash),
                 required_validation_tag: String::new(),
+                job_hash: B256::repeat_byte(0xAA),
             };
             policy.validation_request_hash =
                 B256::from(compute_validation_request_hash(&policy).expect("request hash"));

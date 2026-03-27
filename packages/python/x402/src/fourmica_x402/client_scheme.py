@@ -10,15 +10,20 @@ from concurrent.futures import Future
 from typing import Any, Dict, Optional
 
 from eth_account import Account
-
-from fourmica_sdk import Client as FourMicaClient
-from fourmica_sdk import ConfigBuilder
 from fourmica_sdk import (
-    PaymentRequirementsV1 as SDKPaymentRequirementsV1,
-    PaymentRequirementsV2 as SDKPaymentRequirementsV2,
+    Client as FourMicaClient,
+)
+from fourmica_sdk import (
+    ConfigBuilder,
     X402Flow,
     X402PaymentRequired,
     X402ResourceInfo,
+)
+from fourmica_sdk import (
+    PaymentRequirementsV1 as SDKPaymentRequirementsV1,
+)
+from fourmica_sdk import (
+    PaymentRequirementsV2 as SDKPaymentRequirementsV2,
 )
 from x402.interfaces import SchemeNetworkClient, SchemeNetworkClientV1
 from x402.schemas import PaymentRequirements
@@ -196,9 +201,7 @@ class FourMicaEvmScheme(SchemeNetworkClient, SchemeNetworkClientV1):
             accepts=[accepted],
         )
 
-        signed = _run_async(
-            flow.sign_payment_v2(payment_required, accepted, self._user_address)
-        )
+        signed = _run_async(flow.sign_payment_v2(payment_required, accepted, self._user_address))
         return signed.payload
 
     def _create_payment_payload_v1(self, requirements: PaymentRequirementsV1) -> dict[str, Any]:

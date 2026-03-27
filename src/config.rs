@@ -3,7 +3,7 @@ use std::str::FromStr;
 
 use anyhow::{Context, Result, bail};
 use reqwest::Url;
-use rpc::{CorePublicParameters, VALIDATION_REQUEST_BINDING_DOMAIN_V1};
+use rpc::{CorePublicParameters, VALIDATION_REQUEST_BINDING_DOMAIN_V2};
 use sdk_4mica::Address;
 use serde::Deserialize;
 
@@ -119,11 +119,11 @@ fn public_parameters_from_core(
     if validation_hash_canonicalization_version.is_empty() {
         bail!("core public params advertise an empty validation_hash_canonicalization_version");
     }
-    if validation_hash_canonicalization_version != VALIDATION_REQUEST_BINDING_DOMAIN_V1 {
+    if validation_hash_canonicalization_version != VALIDATION_REQUEST_BINDING_DOMAIN_V2 {
         bail!(
             "unsupported validation_hash_canonicalization_version {}, expected {}",
             validation_hash_canonicalization_version,
-            VALIDATION_REQUEST_BINDING_DOMAIN_V1
+            VALIDATION_REQUEST_BINDING_DOMAIN_V2
         );
     }
     if accepted_guarantee_versions
@@ -495,7 +495,7 @@ mod tests {
             trusted_validation_registries: vec![
                 "0x0000000000000000000000000000000000000011".into(),
             ],
-            validation_hash_canonicalization_version: VALIDATION_REQUEST_BINDING_DOMAIN_V1.into(),
+            validation_hash_canonicalization_version: VALIDATION_REQUEST_BINDING_DOMAIN_V2.into(),
         }
     }
 
@@ -731,7 +731,7 @@ mod tests {
     fn public_parameters_from_core_rejects_unsupported_canonicalization_version() {
         clear_network_env();
         let mut params = sample_core_params();
-        params.validation_hash_canonicalization_version = "4MICA_VALIDATION_REQUEST_V2".into();
+        params.validation_hash_canonicalization_version = "4MICA_VALIDATION_REQUEST_V1".into();
 
         let err = public_parameters_from_core(params, None).unwrap_err();
         assert!(
