@@ -1,3 +1,4 @@
+use std::sync::Mutex;
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
@@ -440,7 +441,7 @@ async fn tabs_endpoint_returns_response_from_service() {
         Vec::new(),
         vec![NetworkTabService {
             network: "eip155:11155111".into(),
-            service: service as Arc<dyn TabService>,
+            service: service.clone() as Arc<dyn TabService>,
         }],
         Some("eip155:11155111".into()),
         None,
@@ -449,6 +450,8 @@ async fn tabs_endpoint_returns_response_from_service() {
 
     let request = CreateTabRequest {
         network: None,
+        guarantee_version: Some(2),
+        x402_version: Some(2),
         user_address: "0xabc".into(),
         recipient_address: "0xdef".into(),
         erc20_token: Some("0xeee".into()),
@@ -463,6 +466,7 @@ async fn tabs_endpoint_returns_response_from_service() {
     assert_eq!(payload.tab_id, "0x1");
     assert_eq!(payload.start_timestamp, 123);
     assert_eq!(payload.next_req_id, "0x0");
+    assert_eq!(service.last_request_guarantee_version(), Some(Some(2)));
 }
 
 #[tokio::test]
@@ -472,6 +476,8 @@ async fn tabs_endpoint_returns_not_implemented_when_disabled() {
 
     let request = CreateTabRequest {
         network: None,
+        guarantee_version: Some(1),
+        x402_version: Some(1),
         user_address: "0xabc".into(),
         recipient_address: "0xdef".into(),
         erc20_token: Some("0xeee".into()),
@@ -510,6 +516,8 @@ async fn tabs_endpoint_propagates_upstream_errors() {
 
     let request = CreateTabRequest {
         network: None,
+        guarantee_version: Some(2),
+        x402_version: Some(2),
         user_address: "0xabc".into(),
         recipient_address: "0xdef".into(),
         erc20_token: Some("0xeee".into()),
@@ -526,6 +534,126 @@ async fn tabs_endpoint_propagates_upstream_errors() {
             .as_str()
             .unwrap()
             .contains("user not registered")
+    );
+}
+
+#[tokio::test]
+async fn tabs_endpoint_defaults_guarantee_version_to_v1_when_omitted() {
+    let tab_response = CreateTabResponse {
+        tab_id: "0x1".into(),
+        user_address: "0xabc".into(),
+        recipient_address: "0xdef".into(),
+        asset_address: "0xeee".into(),
+        start_timestamp: 123,
+        ttl_seconds: 60,
+        next_req_id: "0x0".into(),
+    };
+    let service = Arc::new(MockTabService::success(tab_response));
+    let state = Arc::new(AppState::new(
+        Vec::new(),
+        vec![NetworkTabService {
+            network: "eip155:11155111".into(),
+            service: service.clone() as Arc<dyn TabService>,
+        }],
+        Some("eip155:11155111".into()),
+        None,
+    ));
+    let router = build_router(state);
+
+    let request = CreateTabRequest {
+        network: None,
+        guarantee_version: None,
+        x402_version: None,
+        user_address: "0xabc".into(),
+        recipient_address: "0xdef".into(),
+        erc20_token: Some("0xeee".into()),
+        ttl_seconds: Some(60),
+    };
+
+    let response = router.oneshot(post_json("/tabs", &request)).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(service.last_request_guarantee_version(), Some(None));
+}
+
+#[tokio::test]
+async fn tabs_endpoint_derives_guarantee_version_from_x402_version() {
+    let tab_response = CreateTabResponse {
+        tab_id: "0x1".into(),
+        user_address: "0xabc".into(),
+        recipient_address: "0xdef".into(),
+        asset_address: "0xeee".into(),
+        start_timestamp: 123,
+        ttl_seconds: 60,
+        next_req_id: "0x0".into(),
+    };
+    let service = Arc::new(MockTabService::success(tab_response));
+    let state = Arc::new(AppState::new(
+        Vec::new(),
+        vec![NetworkTabService {
+            network: "eip155:11155111".into(),
+            service: service.clone() as Arc<dyn TabService>,
+        }],
+        Some("eip155:11155111".into()),
+        None,
+    ));
+    let router = build_router(state);
+
+    let request = serde_json::json!({
+        "userAddress": "0xabc",
+        "recipientAddress": "0xdef",
+        "erc20Token": "0xeee",
+        "ttlSeconds": 60,
+        "x402Version": 2
+    });
+
+    let response = router.oneshot(post_json("/tabs", &request)).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(service.last_request_guarantee_version(), Some(None));
+    assert_eq!(service.last_request_x402_version(), Some(Some(2)));
+}
+
+#[tokio::test]
+async fn tabs_endpoint_rejects_mismatched_guarantee_and_x402_versions() {
+    let tab_response = CreateTabResponse {
+        tab_id: "0x1".into(),
+        user_address: "0xabc".into(),
+        recipient_address: "0xdef".into(),
+        asset_address: "0xeee".into(),
+        start_timestamp: 123,
+        ttl_seconds: 60,
+        next_req_id: "0x0".into(),
+    };
+    let service = Arc::new(MockTabService::success(tab_response));
+    let state = Arc::new(AppState::new(
+        Vec::new(),
+        vec![NetworkTabService {
+            network: "eip155:11155111".into(),
+            service: service as Arc<dyn TabService>,
+        }],
+        Some("eip155:11155111".into()),
+        None,
+    ));
+    let router = build_router(state);
+
+    let request = serde_json::json!({
+        "userAddress": "0xabc",
+        "recipientAddress": "0xdef",
+        "erc20Token": "0xeee",
+        "ttlSeconds": 60,
+        "guaranteeVersion": 1,
+        "x402Version": 2
+    });
+
+    let response = router.oneshot(post_json("/tabs", &request)).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        payload["error"].as_str(),
+        Some("guaranteeVersion 1 does not match x402Version 2")
     );
 }
 
@@ -1144,6 +1272,7 @@ impl ExactService for MockExact {
 struct MockTabService {
     result: Result<CreateTabResponse, TabError>,
     calls: AtomicUsize,
+    last_request: Mutex<Option<CreateTabRequest>>,
 }
 
 impl MockTabService {
@@ -1151,6 +1280,7 @@ impl MockTabService {
         Self {
             result: Ok(response),
             calls: AtomicUsize::new(0),
+            last_request: Mutex::new(None),
         }
     }
 
@@ -1159,6 +1289,7 @@ impl MockTabService {
         Self {
             result: Err(error),
             calls: AtomicUsize::new(0),
+            last_request: Mutex::new(None),
         }
     }
 
@@ -1166,12 +1297,29 @@ impl MockTabService {
     fn calls(&self) -> usize {
         self.calls.load(Ordering::SeqCst)
     }
+
+    fn last_request_guarantee_version(&self) -> Option<Option<u64>> {
+        self.last_request
+            .lock()
+            .expect("lock request")
+            .as_ref()
+            .map(|request| request.guarantee_version)
+    }
+
+    fn last_request_x402_version(&self) -> Option<Option<u8>> {
+        self.last_request
+            .lock()
+            .expect("lock request")
+            .as_ref()
+            .map(|request| request.x402_version)
+    }
 }
 
 #[async_trait]
 impl TabService for MockTabService {
-    async fn create_tab(&self, _: &CreateTabRequest) -> Result<CreateTabResponse, TabError> {
+    async fn create_tab(&self, request: &CreateTabRequest) -> Result<CreateTabResponse, TabError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
+        *self.last_request.lock().expect("lock request") = Some(request.clone());
         match &self.result {
             Ok(response) => Ok(response.clone()),
             Err(err) => Err(clone_tab_error(err)),

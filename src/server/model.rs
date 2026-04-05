@@ -123,12 +123,17 @@ pub struct PaymentRequirements {
     pub extra: Option<Value>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateTabRequest {
     #[serde(default)]
     #[serde(alias = "networkId", alias = "network_id")]
     pub network: Option<String>,
+    #[serde(default)]
+    pub guarantee_version: Option<u64>,
+    #[serde(rename = "x402Version")]
+    #[serde(default)]
+    pub x402_version: Option<u8>,
     pub user_address: String,
     pub recipient_address: String,
     #[serde(alias = "assetAddress")]
@@ -136,6 +141,24 @@ pub struct CreateTabRequest {
     pub erc20_token: Option<String>,
     #[serde(default)]
     pub ttl_seconds: Option<u64>,
+}
+
+impl CreateTabRequest {
+    pub fn resolved_guarantee_version(&self) -> Result<u64, String> {
+        match (self.guarantee_version, self.x402_version) {
+            (Some(guarantee_version), Some(x402_version))
+                if guarantee_version != u64::from(x402_version) =>
+            {
+                Err(format!(
+                    "guaranteeVersion {} does not match x402Version {}",
+                    guarantee_version, x402_version
+                ))
+            }
+            (Some(guarantee_version), _) => Ok(guarantee_version),
+            (None, Some(x402_version)) => Ok(u64::from(x402_version)),
+            (None, None) => Ok(1),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -263,6 +286,7 @@ pub struct CoreCreateTabRequest {
     pub recipient_address: String,
     pub erc20_token: Option<String>,
     pub ttl: Option<u64>,
+    pub guarantee_version: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -283,6 +307,68 @@ mod tests {
     use super::*;
     use crypto::bls::KeyMaterial;
     use serde_json::json;
+
+    #[test]
+    fn create_tab_request_deserializes_guarantee_version() {
+        let value = json!({
+            "network": "eip155:11155111",
+            "guaranteeVersion": 2,
+            "x402Version": 2,
+            "userAddress": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "recipientAddress": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "erc20Token": "0xcccccccccccccccccccccccccccccccccccccccc",
+            "ttlSeconds": 60
+        });
+
+        let decoded: CreateTabRequest = serde_json::from_value(value).expect("deserialize request");
+        assert_eq!(decoded.guarantee_version, Some(2));
+        assert_eq!(decoded.x402_version, Some(2));
+    }
+
+    #[test]
+    fn create_tab_request_resolves_guarantee_version_from_x402_version() {
+        let request = CreateTabRequest {
+            network: None,
+            guarantee_version: None,
+            x402_version: Some(2),
+            user_address: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+            recipient_address: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
+            erc20_token: None,
+            ttl_seconds: None,
+        };
+
+        assert_eq!(request.resolved_guarantee_version().unwrap(), 2);
+    }
+
+    #[test]
+    fn create_tab_request_rejects_mismatched_versions() {
+        let request = CreateTabRequest {
+            network: None,
+            guarantee_version: Some(1),
+            x402_version: Some(2),
+            user_address: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+            recipient_address: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
+            erc20_token: None,
+            ttl_seconds: None,
+        };
+
+        let err = request.resolved_guarantee_version().unwrap_err();
+        assert_eq!(err, "guaranteeVersion 1 does not match x402Version 2");
+    }
+
+    #[test]
+    fn core_create_tab_request_serializes_guarantee_version() {
+        let request = CoreCreateTabRequest {
+            user_address: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+            recipient_address: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
+            erc20_token: Some("0xcccccccccccccccccccccccccccccccccccccccc".into()),
+            ttl: Some(60),
+            guarantee_version: 2,
+        };
+
+        let encoded = serde_json::to_value(request).expect("serialize request");
+        assert_eq!(encoded["guarantee_version"], 2);
+    }
 
     #[test]
     fn core_create_tab_response_deserializes_asset_and_next_req_aliases() {

@@ -172,13 +172,14 @@ app = FastAPI(lifespan=lifespan)
 generator = MinionGenerator()
 
 
-async def _open_tab(user_address: str) -> Dict[str, Any]:
+async def _open_tab(user_address: str, x402_version: Optional[int]) -> Dict[str, Any]:
     payload = {
         "userAddress": user_address,
         "recipientAddress": RECIPIENT_ADDRESS,
         "erc20Token": USDC_ADDRESS,
         "network": X402_NETWORK,
         "ttlSeconds": 3600,
+        "x402Version": x402_version or 1,
     }
     url = f"{FACILITATOR_URL.rstrip('/')}/tabs"
     response = await app.state.http.post(url, json=payload)
@@ -218,7 +219,7 @@ async def _settle_with_facilitator(
 
 @app.post("/tab")
 async def create_tab(request: TabRequest) -> JSONResponse:
-    tab = await _open_tab(request.userAddress)
+    tab = await _open_tab(request.userAddress, request.x402Version)
     requirements = _payment_requirements_template()
     extra = requirements.get("extra", {})
     extra.update(

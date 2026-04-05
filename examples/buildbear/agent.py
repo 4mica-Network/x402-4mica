@@ -8,7 +8,7 @@ import base64
 import json
 import os
 import time
-from typing import Dict, List, TypedDict
+from typing import List, TypedDict
 
 import httpx
 from dotenv import load_dotenv

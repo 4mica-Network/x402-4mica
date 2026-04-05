@@ -188,6 +188,13 @@ impl AppState {
             return Err(TabError::Unsupported);
         }
 
+        let guarantee_version = request
+            .resolved_guarantee_version()
+            .map_err(TabError::Invalid)?;
+        u8::try_from(guarantee_version).map_err(|_| {
+            TabError::Invalid(format!("unsupported guaranteeVersion {guarantee_version}"))
+        })?;
+
         let requested_network = request
             .network
             .as_deref()
@@ -743,11 +750,15 @@ impl CoreTabService {
 impl TabService for CoreTabService {
     async fn create_tab(&self, request: &CreateTabRequest) -> Result<CreateTabResponse, TabError> {
         let asset_address = self.resolve_asset_address(request)?;
+        let guarantee_version = request
+            .resolved_guarantee_version()
+            .map_err(TabError::Invalid)?;
         let payload = CoreCreateTabRequest {
             user_address: request.user_address.clone(),
             recipient_address: request.recipient_address.clone(),
             erc20_token: Some(asset_address.clone()),
             ttl: request.ttl_seconds,
+            guarantee_version,
         };
 
         let result: CoreCreateTabResponse = self.post("core/payment-tabs", &payload).await?;
