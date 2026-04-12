@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from typing import Dict, List, TypedDict
 
-SUPPORTED_NETWORKS: List[str] = ["eip155:11155111", "eip155:80002"]
+SUPPORTED_NETWORKS: List[str] = ["eip155:11155111", "eip155:84532", "eip155:80002"]
 
 DEFAULT_RPC_URLS: Dict[str, str] = {
     "eip155:11155111": "https://ethereum.sepolia.api.4mica.xyz",
+    "eip155:84532": "https://base.sepolia.api.4mica.xyz",
     "eip155:80002": "https://api.4mica.xyz",
 }
 
@@ -20,12 +21,21 @@ class DefaultAsset(TypedDict):
 
 
 DEFAULT_ASSETS: Dict[str, DefaultAsset] = {
+    # Ethereum Sepolia USDC
     "eip155:11155111": {
         "address": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
         "name": "USDC",
         "version": "2",
         "decimals": 6,
     },
+    # Base Sepolia USDC
+    "eip155:84532": {
+        "address": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+        "name": "USDC",
+        "version": "2",
+        "decimals": 6,
+    },
+    # Polygon PoS Amoy USDC
     "eip155:80002": {
         "address": "0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582",
         "name": "USDC",

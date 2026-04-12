@@ -12,6 +12,7 @@ import { SUPPORTED_NETWORKS } from '../server/scheme.js'
 
 const NETWORK_RPC_URLS: Record<Network, string> = {
   'eip155:11155111': 'https://ethereum.sepolia.api.4mica.xyz',
+  'eip155:84532': 'https://base.sepolia.api.4mica.xyz',
   'eip155:80002': 'https://api.4mica.xyz',
 }
 
