@@ -1,6 +1,6 @@
 {
   "name": "@4mica/x402",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "type": "module",
   "description": "TypeScript x402 utilities for interacting with the 4Mica payment network",
   "license": "MIT",
@@ -42,9 +42,9 @@
     "demo:dev": "cd demo && yarn dev"
   },
   "dependencies": {
-    "@x402/core": "^2.2.0",
-    "@x402/extensions": "^2.2.0",
-    "@4mica/sdk": "^0.5.3",
+    "@x402/core": "^2.9.0",
+    "@x402/extensions": "^2.9.0",
+    "@4mica/sdk": "^1.2.3",
     "viem": "^2.45.1"
   },
   "devDependencies": {
