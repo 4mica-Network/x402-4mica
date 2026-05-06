@@ -51,7 +51,8 @@ export class FourMicaFacilitatorClient extends HTTPFacilitatorClient {
   async openTab(
     userAddress: string,
     paymentRequirements: PaymentRequirements,
-    ttlSeconds?: number
+    ttlSeconds?: number,
+    guaranteeVersion?: number
   ): Promise<OpenTabResponse> {
     let headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -70,6 +71,7 @@ export class FourMicaFacilitatorClient extends HTTPFacilitatorClient {
           network: paymentRequirements.network,
           erc20Token: paymentRequirements.asset,
           ttlSeconds,
+          guaranteeVersion: guaranteeVersion ?? 1,
         })
       ),
     })

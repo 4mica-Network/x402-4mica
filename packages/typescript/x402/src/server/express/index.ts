@@ -168,14 +168,15 @@ export function paymentMiddlewareFromHTTPServer(
       const advertisedUrl = new URL(tabConfig.advertisedEndpoint)
       if (req.path === advertisedUrl.pathname) {
         // Parse the request body
-        const { userAddress, paymentRequirements } = req.body
+        const { userAddress, paymentRequirements, x402Version } = req.body
 
         try {
           // Call the facilitator to open the tab
           const openTabResponse = await facilitatorClient.openTab(
             userAddress,
             paymentRequirements,
-            tabConfig.ttlSeconds
+            tabConfig.ttlSeconds,
+            x402Version
           )
 
           // Return the response
