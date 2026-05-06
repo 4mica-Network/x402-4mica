@@ -76,9 +76,13 @@ def fastapi_payment_middleware_from_config(
             body = await request.json()
             user_address = body.get("userAddress")
             payment_requirements = body.get("paymentRequirements")
+            x402_version = body.get("x402Version")
             try:
                 resp = await fourmica_facilitator.open_tab(
-                    user_address, payment_requirements, ttl_seconds=ttl_seconds
+                    user_address,
+                    payment_requirements,
+                    ttl_seconds=ttl_seconds,
+                    guarantee_version=x402_version,
                 )
                 return fastapi_mw.JSONResponse(content=resp.__dict__)
             except OpenTabError as err:
@@ -139,9 +143,13 @@ def flask_payment_middleware_from_config(
         body = request.get_json(silent=True) or {}
         user_address = body.get("userAddress")
         payment_requirements = body.get("paymentRequirements")
+        x402_version = body.get("x402Version")
         try:
             resp = fourmica_facilitator.open_tab(
-                user_address, payment_requirements, ttl_seconds=ttl_seconds
+                user_address,
+                payment_requirements,
+                ttl_seconds=ttl_seconds,
+                guarantee_version=x402_version,
             )
             return jsonify(resp.__dict__)
         except OpenTabError as err:

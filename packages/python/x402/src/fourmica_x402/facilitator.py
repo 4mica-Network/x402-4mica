@@ -104,6 +104,7 @@ class FourMicaFacilitatorClient(HTTPFacilitatorClient):
         user_address: str,
         payment_requirements: PaymentRequirements | PaymentRequirementsV1 | Dict[str, Any],
         ttl_seconds: Optional[int] = None,
+        guarantee_version: Optional[int] = None,
     ) -> OpenTabResponse:
         headers = {"Content-Type": "application/json"}
         if getattr(self, "_auth_provider", None) is not None:
@@ -120,6 +121,7 @@ class FourMicaFacilitatorClient(HTTPFacilitatorClient):
             "recipientAddress": pay_to,
             "network": network,
             "erc20Token": asset,
+            "guaranteeVersion": guarantee_version if guarantee_version is not None else 1,
         }
         if ttl_seconds is not None:
             body["ttlSeconds"] = ttl_seconds
@@ -185,6 +187,7 @@ class FourMicaFacilitatorClientSync(HTTPFacilitatorClientSync):
         user_address: str,
         payment_requirements: PaymentRequirements | PaymentRequirementsV1 | Dict[str, Any],
         ttl_seconds: Optional[int] = None,
+        guarantee_version: Optional[int] = None,
     ) -> OpenTabResponse:
         headers = {"Content-Type": "application/json"}
         if getattr(self, "_auth_provider", None) is not None:
@@ -201,6 +204,7 @@ class FourMicaFacilitatorClientSync(HTTPFacilitatorClientSync):
             "recipientAddress": pay_to,
             "network": network,
             "erc20Token": asset,
+            "guaranteeVersion": guarantee_version if guarantee_version is not None else 1,
         }
         if ttl_seconds is not None:
             body["ttlSeconds"] = ttl_seconds
