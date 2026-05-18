@@ -7,7 +7,7 @@ import {
   MoneyParser,
 } from '@x402/core/types'
 
-export const SUPPORTED_NETWORKS: Network[] = ['eip155:11155111', 'eip155:84532', 'eip155:80002']
+export const SUPPORTED_NETWORKS: Network[] = ['eip155:11155111', 'eip155:84532', 'eip155:8453']
 
 /**
  * EVM server implementation for the 4mica payment scheme.
@@ -211,12 +211,12 @@ export class FourMicaEvmScheme implements SchemeNetworkServer {
         version: '2',
         decimals: 6,
       }, // Base Sepolia USDC
-      'eip155:80002': {
-        address: '0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582',
+      'eip155:8453': {
+        address: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
         name: 'USDC',
         version: '2',
         decimals: 6,
-      }, // Polygon PoS Amoy USDC
+      }, // Base mainnet USDC
     }
 
     const assetInfo = stablecoins[network]
