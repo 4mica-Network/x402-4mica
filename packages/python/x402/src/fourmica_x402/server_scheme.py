@@ -81,13 +81,13 @@ class FourMicaEvmScheme(SchemeNetworkServer):
         )
 
     def _convert_to_token_amount(self, decimal_amount: str, decimals: int) -> str:
+        from decimal import Decimal, InvalidOperation
+
         try:
-            amount = float(decimal_amount)
-        except ValueError as exc:
+            amount = Decimal(decimal_amount)
+        except InvalidOperation as exc:
             raise ValueError(f"Invalid amount: {decimal_amount}") from exc
         if amount < 0:
             raise ValueError("Amount must be non-negative")
-        int_part, _, dec_part = f"{amount}".partition(".")
-        padded_dec = (dec_part + "0" * decimals)[:decimals]
-        token_amount = (int_part + padded_dec).lstrip("0") or "0"
-        return token_amount
+        token_amount = int(amount * Decimal(10) ** decimals)
+        return str(token_amount)

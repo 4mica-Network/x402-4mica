@@ -7,7 +7,6 @@ from urllib.parse import urlparse
 
 from x402.http import PaywallConfig, PaywallProvider, RoutesConfig
 from x402.http.middleware import fastapi as fastapi_mw
-from x402.http.middleware import flask as flask_mw
 from x402.server import x402ResourceServer, x402ResourceServerSync
 
 from .constants import SUPPORTED_NETWORKS
@@ -118,6 +117,8 @@ def flask_payment_middleware_from_config(
     sync_facilitator_on_start: bool = True,
     ttl_seconds: int | None = None,
 ):
+    from x402.http.middleware import flask as flask_mw
+
     facilitators: list[Any] = []
     if facilitator_client is not None:
         facilitators = (
