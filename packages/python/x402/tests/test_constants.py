@@ -30,6 +30,12 @@ def test_default_assets_match_expected():
     assert DEFAULT_ASSETS["eip155:8453"]["decimals"] == 6
 
 
+def test_default_asset_eip712_domain_names_match_onchain():
+    assert DEFAULT_ASSETS["eip155:8453"]["name"] == "USD Coin"
+    assert DEFAULT_ASSETS["eip155:84532"]["name"] == "USDC"
+    assert DEFAULT_ASSETS["eip155:11155111"]["name"] == "USDC"
+
+
 def test_get_default_asset_raises_on_unsupported_network():
     with pytest.raises(UnsupportedNetworkError):
         get_default_asset("eip155:1")
