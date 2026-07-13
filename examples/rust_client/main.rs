@@ -1,7 +1,7 @@
 use std::env;
 use std::io::ErrorKind;
 
-use alloy2::signers::local::PrivateKeySigner;
+use alloy::signers::local::PrivateKeySigner;
 use anyhow::{Context, Result};
 use dotenvy::from_filename;
 use reqwest::StatusCode;

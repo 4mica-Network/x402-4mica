@@ -5,11 +5,9 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0"
-# NOTE: temporary local path deps to the 4mica-core `develop` worktree (cycle model).
-# The cycle-model crates are unpublished; swap back to a published version once released.
-rpc-4mica = { path = "/Users/maironmahzoun/4mica-core-develop/crates/rpc" }
-sdk-4mica = { path = "/Users/maironmahzoun/4mica-core-develop/sdk" }
-crypto-4mica = { path = "/Users/maironmahzoun/4mica-core-develop/crates/crypto" }
+rpc-4mica = "=2.0.0-alpha.1"
+sdk-4mica = "=2.0.0-alpha.1"
+crypto-4mica = "=2.0.0-alpha.1"
 axum = { version = "0.8.8", features = ["macros", "json"] }
 base64 = "0.22"
 dotenvy = "0.15"
@@ -22,7 +20,7 @@ tokio = { version = "1.49.0", features = [
     "signal",
     "sync",
 ] }
-tower-http = { version = "0.6.6", features = ["trace"] }
+tower-http = { version = "0.7.0", features = ["trace"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 reqwest = { version = "0.13.1", default-features = false, features = [
@@ -32,23 +30,9 @@ reqwest = { version = "0.13.1", default-features = false, features = [
 hex = "0.4"
 async-trait = "0.1"
 x402-rs = "0.12.5"
-alloy = "1.7.3"
+alloy = "2.1.1"
 
 [dev-dependencies]
 tower = { version = "0.5.3", features = ["util"] }
-serial_test = "3.3.1"
-# The rust_client example signs via the 4mica SDK, whose client requires an
-# alloy 2.x `Signer`. The facilitator itself stays on alloy 1.7.3 (x402-rs), so
-# alias alloy 2.x here for the example only; cargo unifies it with the SDK's alloy.
-alloy2 = { package = "alloy", version = "2.0.4" }
-# The tests/e2e.rs integration test is a standalone crate (this is a bin-only
-# package) and therefore needs its own copy of these deps. It spawns the built
-# facilitator binary and drives it over HTTP against a running 4mica core.
-reqwest = { version = "0.13.1", default-features = false, features = [
-    "json",
-    "default-tls",
-] }
-tokio = { version = "1.49.0", features = ["macros", "rt-multi-thread", "net", "time"] }
-serde_json = "1.0"
-axum = { version = "0.8.8", features = ["json"] }
-sdk-4mica = { path = "/Users/maironmahzoun/4mica-core-develop/sdk" }
+serial_test = "3.5.0"
+tokio = { version = "1.49.0", features = ["net", "time"] }

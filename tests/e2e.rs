@@ -62,10 +62,8 @@ const DUMMY_ASSET: &str = "0x2222222222222222222222222222222222222222";
 // Anvil default accounts used by the 4mica-core dev stack. Account 0 is the
 // funded deployer / 4mica operator wallet; we use it as the facilitator's auth
 // wallet and accounts 1/2 as payer/recipient for the happy path.
-const ANVIL_ACCT0_KEY: &str =
-    "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
-const ANVIL_ACCT1_KEY: &str =
-    "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
+const ANVIL_ACCT0_KEY: &str = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+const ANVIL_ACCT1_KEY: &str = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
 const ANVIL_ACCT1_ADDR: &str = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
 const ANVIL_ACCT2_ADDR: &str = "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC";
 // Local core uses native ETH as collateral (asset address == zero).
@@ -178,8 +176,17 @@ async fn wait_healthy(client: &reqwest::Client, base: &str, child: &mut Child) -
     false
 }
 
-async fn post_json(client: &reqwest::Client, url: &str, body: &Value) -> (reqwest::StatusCode, Value) {
-    let resp = client.post(url).json(body).send().await.expect("post request");
+async fn post_json(
+    client: &reqwest::Client,
+    url: &str,
+    body: &Value,
+) -> (reqwest::StatusCode, Value) {
+    let resp = client
+        .post(url)
+        .json(body)
+        .send()
+        .await
+        .expect("post request");
     let status = resp.status();
     let value = resp.json::<Value>().await.unwrap_or(Value::Null);
     (status, value)
@@ -197,13 +204,16 @@ async fn fetch_public_params(client: &reqwest::Client, core_url: &str) -> Value 
         .expect("public-params json")
 }
 
-type SdkFlow = sdk_4mica::X402Flow<sdk_4mica::Client<alloy2::signers::local::PrivateKeySigner>>;
+type SdkFlow = sdk_4mica::X402Flow<sdk_4mica::Client<alloy::signers::local::PrivateKeySigner>>;
 
 /// Builds a real SDK `X402Flow` (signing with `signer_key`) plus a stub
 /// `tabEndpoint` that hands out a unique `req_id` nonce (the facilitator no longer
 /// serves `/tabs`). Returns the flow, the stub URL, and the stub's task handle
 /// (abort it when done). Signing itself makes no core call beyond the stub.
-async fn build_sdk_flow(core_url: &str, signer_key: &str) -> (SdkFlow, String, tokio::task::JoinHandle<()>) {
+async fn build_sdk_flow(
+    core_url: &str,
+    signer_key: &str,
+) -> (SdkFlow, String, tokio::task::JoinHandle<()>) {
     let stub_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind tab stub");
@@ -214,14 +224,16 @@ async fn build_sdk_flow(core_url: &str, signer_key: &str) -> (SdkFlow, String, t
     });
     let tab_endpoint = format!("http://127.0.0.1:{stub_port}/tab");
 
-    let signer: alloy2::signers::local::PrivateKeySigner =
+    let signer: alloy::signers::local::PrivateKeySigner =
         signer_key.parse().expect("invalid signer key");
     let config = sdk_4mica::ConfigBuilder::default()
         .signer(signer)
         .rpc_url(core_url.to_string())
         .build()
         .expect("build SDK config");
-    let core_client = sdk_4mica::Client::new(config).await.expect("init SDK client");
+    let core_client = sdk_4mica::Client::new(config)
+        .await
+        .expect("init SDK client");
     let flow = sdk_4mica::X402Flow::new(core_client).expect("init X402Flow");
     (flow, tab_endpoint, stub_handle)
 }
@@ -262,8 +274,7 @@ fn unfunded_settle_body(scheme: &str, network: &str) -> Value {
 
 #[tokio::test]
 async fn e2e_facilitator_endpoints() {
-    let core_url =
-        env_opt("E2E_CORE_API_URL").unwrap_or_else(|| DEFAULT_CORE_API_URL.to_string());
+    let core_url = env_opt("E2E_CORE_API_URL").unwrap_or_else(|| DEFAULT_CORE_API_URL.to_string());
 
     // Opt into the funded happy path with `E2E_RUN_HAPPY=1` (or by supplying a
     // payer key).
@@ -371,8 +382,7 @@ async fn e2e_facilitator_endpoints() {
 
     // --- /verify: self-consistent payload passes preflight (no core call) ---
     let body = unfunded_settle_body(&env.scheme, &env.network);
-    let (verify_status, verify_body) =
-        post_json(&client, &format!("{base}/verify"), &body).await;
+    let (verify_status, verify_body) = post_json(&client, &format!("{base}/verify"), &body).await;
     assert!(verify_status.is_success());
     assert_eq!(
         verify_body["isValid"], true,
@@ -382,9 +392,11 @@ async fn e2e_facilitator_endpoints() {
     // --- /settle (negative): same payload with a bogus signature. Since /verify
     // accepted it, a failure here proves the facilitator forwarded to
     // core/guarantees and surfaced core's rejection. ---
-    let (settle_status, settle_body) =
-        post_json(&client, &format!("{base}/settle"), &body).await;
-    assert!(settle_status.is_success(), "settle HTTP status: {settle_status}");
+    let (settle_status, settle_body) = post_json(&client, &format!("{base}/settle"), &body).await;
+    assert!(
+        settle_status.is_success(),
+        "settle HTTP status: {settle_status}"
+    );
     assert_eq!(
         settle_body["success"], false,
         "unfunded/bogus-signature settle should fail at core: {settle_body}"
@@ -442,7 +454,10 @@ async fn assert_verify_rejected(client: &reqwest::Client, base: &str, body: &Val
         "{label}: expected /verify to reject, got {resp}"
     );
     assert!(
-        resp["invalidReason"].as_str().map(|s| !s.is_empty()).unwrap_or(false),
+        resp["invalidReason"]
+            .as_str()
+            .map(|s| !s.is_empty())
+            .unwrap_or(false),
         "{label}: expected an invalidReason, got {resp}"
     );
 }
@@ -472,8 +487,7 @@ async fn verify_v2_against_trusted_registry(
         .and_then(|c| c.parse().ok())
         .expect("network chain id");
 
-    let (flow, tab_endpoint, stub_handle) =
-        build_sdk_flow(&env.core_url, ANVIL_ACCT1_KEY).await;
+    let (flow, tab_endpoint, stub_handle) = build_sdk_flow(&env.core_url, ANVIL_ACCT1_KEY).await;
 
     let extra = json!({
         "tabEndpoint": tab_endpoint,
@@ -621,7 +635,10 @@ async fn run_happy_path(client: &reqwest::Client, base: &str, env: &TestEnv, hap
     // If it stopped on a known core-side seeding gap, report exactly what to seed
     // and skip rather than fail — that state is provisioned by the core dev
     // harness, not this test.
-    let err = settle_body_resp["error"].as_str().unwrap_or("").to_lowercase();
+    let err = settle_body_resp["error"]
+        .as_str()
+        .unwrap_or("")
+        .to_lowercase();
     let seeding_gap = [
         "missing scope",
         "missing authorization",
@@ -633,7 +650,10 @@ async fn run_happy_path(client: &reqwest::Client, base: &str, env: &TestEnv, hap
     .iter()
     .any(|m| err.contains(m));
     if seeding_gap {
-        eprintln!("[e2e] happy path stopped at a core seeding gap: {}", settle_body_resp["error"]);
+        eprintln!(
+            "[e2e] happy path stopped at a core seeding gap: {}",
+            settle_body_resp["error"]
+        );
         eprintln!(
             "[e2e]   seed the local core, then re-run: grant the facilitator auth wallet (anvil acct 0) the `guarantee:issue` scope, and deposit ETH collateral for the payer (anvil acct 1)."
         );
